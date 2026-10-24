@@ -1,0 +1,11 @@
+plugins { id 'com.android.application' }
+android {
+    namespace 'com.akai.livingtv'
+    compileSdk 34
+    defaultConfig { applicationId 'com.akai.livingtv'; minSdk 28; targetSdk 34; versionCode 30; versionName '0.8.16'; ndk { abiFilters((project.findProperty('meadowAbis') ?: 'armeabi-v7a').split(',')) } }
+    buildFeatures { buildConfig true }
+    testOptions { unitTests.includeAndroidResources = true }
+    buildTypes { release { minifyEnabled true; shrinkResources true; proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'; signingConfig signingConfigs.debug } }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+}
+dependencies { implementation 'io.github.webrtc-sdk:android:144.7559.15'; testImplementation 'junit:junit:4.13.2'; testImplementation 'org.robolectric:robolectric:4.14.1' }

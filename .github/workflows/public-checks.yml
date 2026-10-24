@@ -1,0 +1,19 @@
+name: Public source checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  privacy-and-adapters:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check tracked publication files
+        run: python3 tools/check-public-files.py --mode tracked
+      - name: Check local utility fixtures
+        run: python3 -m unittest discover -s tools/tests -p 'test_*.py'
+      - name: Check Codex adapter fixtures
+        run: node --test bridge/voice/*.test.mjs

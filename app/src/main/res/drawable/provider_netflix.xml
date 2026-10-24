@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Self-authored neutral TV placeholder. No third-party brand geometry. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="48dp" android:height="34dp" android:viewportWidth="48" android:viewportHeight="34">
+    <path android:fillColor="#FFCEDBD5" android:fillType="evenOdd" android:pathData="M8,3 L40,3 Q44,3 44,7 L44,25 Q44,29 40,29 L8,29 Q4,29 4,25 L4,7 Q4,3 8,3 Z M8,7 L8,25 L40,25 L40,7 Z M17,31 L31,31 L31,33 L17,33 Z"/>
+    <path android:fillColor="#FFCEDBD5" android:pathData="M20,10 L31,16 L20,22 Z"/>
+</vector>

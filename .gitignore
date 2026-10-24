@@ -1,0 +1,46 @@
+.gradle/
+**/build/
+local.properties
+artifacts/private/
+*.jks
+
+.playwright-cli/
+**/__pycache__/
+
+# Device builds, captures and private bridge runtime stay local.
+artifacts/
+output/
+.env
+.env.*
+*.pem
+*.key
+*.apk
+.DS_Store
+
+# Local identities and pairing material are never distributable project files.
+.codex/
+.state/
+.local/
+logs/
+**/auth.json
+**/credentials.json
+**/pairing.json
+**/companion-config.json
+**/token
+**/adbkey
+**/adbkey.pub
+**/id_rsa
+**/id_rsa.pub
+**/id_ed25519
+**/id_ed25519.pub
+*.keystore
+*.p12
+*.pfx
+*.mobileprovision
+*.log
+*.trace
+*.tar.gz
+*.zip
+
+# Local private Core build link; never publish its target.
+/.local/
