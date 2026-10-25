@@ -22,7 +22,7 @@ public class WeatherLayoutTest {
     void settle()throws Exception{for(int i=0;i<4;i++){Thread.sleep(40);shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(250));}WindowManager.LayoutParams b=dialog.getWindow().getAttributes();layout(dialog.getWindow().getDecorView(),b.width,b.height);shadowOf(Looper.getMainLooper()).idle();}
     @Test public void weeklyHasSevenDaysInsideCompactPanelAndTransparentFullScreenHost()throws Exception{
         View weekly=(View)field("weeklyPanel");LinearLayout days=(LinearLayout)field("daysRow");assertEquals(1920,dialog.getWindow().getAttributes().width);assertEquals(1080,dialog.getWindow().getAttributes().height);assertEquals(288,weekly.getLeft());assertEquals(162,weekly.getTop());assertEquals(1344,weekly.getWidth());assertEquals(756,weekly.getHeight());
-        assertTrue(dialog.getWindow().getDecorView().getBackground() instanceof ColorDrawable);assertEquals(Color.TRANSPARENT,((ColorDrawable)dialog.getWindow().getDecorView().getBackground()).getColor());assertFalse(dialog.getWindow().getDecorView().getClipToOutline());Outline outline=new Outline();android.graphics.drawable.Drawable background=weekly.getBackground();Rect previous=new Rect(background.getBounds());background.setBounds(0,0,weekly.getWidth(),weekly.getHeight());background.getOutline(outline);background.setBounds(previous);assertEquals(756*.30f,outline.getRadius(),1f);
+        assertTrue(dialog.getWindow().getDecorView().getBackground() instanceof ColorDrawable);assertEquals(Color.TRANSPARENT,((ColorDrawable)dialog.getWindow().getDecorView().getBackground()).getColor());assertFalse(dialog.getWindow().getDecorView().getClipToOutline());Outline outline=new Outline();android.graphics.drawable.Drawable background=weekly.getBackground();Rect previous=new Rect(background.getBounds());background.setBounds(0,0,weekly.getWidth(),weekly.getHeight());background.getOutline(outline);background.setBounds(previous);assertEquals(Glass.PANEL_RADIUS,outline.getRadius(),1f);
         assertEquals(7,days.getChildCount());assertEquals("22°",((TextView)field("temperature")).getText().toString());View first=days.getChildAt(0);assertEquals("24°",((TextView)first.findViewWithTag("weatherMax")).getText().toString());assertEquals("20°",((TextView)first.findViewWithTag("weatherMin")).getText().toString());
         for(int i=0;i<7;i++){View day=days.getChildAt(i);assertTrue(day.getRight()<=days.getWidth());TextView hi=day.findViewWithTag("weatherMax"),lo=day.findViewWithTag("weatherMin");assertNotNull(hi.getLayout());assertTrue(hi.getLayout().getLineBottom(hi.getLayout().getLineCount()-1)<=hi.getHeight());assertTrue(hi.getBottom()<=lo.getTop());}
     }
@@ -40,4 +40,28 @@ public class WeatherLayoutTest {
     @Test public void circularCloseIsReachableAndReleasesModal()throws Exception{
         View other=(View)field("otherCities"),close=(View)field("close");assertTrue(other.requestFocusFromTouch());assertSame(close,other.focusSearch(View.FOCUS_RIGHT));assertTrue(close.requestFocusFromTouch());assertEquals(close.getWidth(),close.getHeight());assertTrue(close.performClick());shadowOf(Looper.getMainLooper()).idle();assertFalse(dialog.isShowing());Field f=MainActivity.class.getDeclaredField("openDialogs");f.setAccessible(true);assertEquals(0,f.getInt(controller.get()));
     }
+    private WeatherScenes.Scene photoScene(View photo)throws Exception{Field scene=photo.getClass().getDeclaredField("scene");scene.setAccessible(true);return (WeatherScenes.Scene)scene.get(photo);}
+    private Bitmap photoBitmap(View photo)throws Exception{Field bitmap=photo.getClass().getDeclaredField("bitmap");bitmap.setAccessible(true);return (Bitmap)bitmap.get(photo);}
+    @Test public void cityPreviewsUseTheirOwnConditionsAndBrowsingKeepsCurrentCity()throws Exception{
+        dialog.dismiss();int[] codes={0,3,61,0,45,95,71,61,0};
+        android.content.SharedPreferences.Editor prefs=controller.get().getSharedPreferences("living",0).edit().putInt("weatherCity",0);
+        for(int i=0;i<codes.length;i++){JSONObject data=forecast(false);data.getJSONObject("current").put("weather_code",codes[i]).put("is_day",i==3?0:1);prefs.putString("weatherForecast"+i,data.toString()).putLong("weatherForecast"+i+"At",System.currentTimeMillis());}prefs.commit();
+        panel=new WeatherDialog(controller.get(),null);panel.open();dialog=(AlertDialog)field("dialog");settle();((View)field("otherCities")).performClick();settle();
+        View[] photos=(View[])field("cityPhotos");WeatherScenes.Scene[] expected={WeatherScenes.Scene.SUNNY,WeatherScenes.Scene.CLOUDY,WeatherScenes.Scene.RAIN,WeatherScenes.Scene.NIGHT,WeatherScenes.Scene.FOG,WeatherScenes.Scene.STORM,WeatherScenes.Scene.SNOW,WeatherScenes.Scene.RAIN,WeatherScenes.Scene.SUNNY};
+        for(int i=0;i<photos.length;i++)assertEquals("Each city must use its own weather",expected[i],photoScene(photos[i]));
+        for(int attempt=0;attempt<8;attempt++){boolean ready=true;for(View photo:photos)if(photoBitmap(photo)==null)ready=false;if(ready)break;settle();}
+        for(View photo:photos)assertNotNull(photoBitmap(photo));assertSame("Same weather shares one decoded photograph",photoBitmap(photos[0]),photoBitmap(photos[8]));
+        assertNotSame("Rain and sun must not reuse a differently cropped common picture",photoBitmap(photos[0]),photoBitmap(photos[2]));
+        FrameLayout[] cards=(FrameLayout[])field("cities");cards[5].requestFocusFromTouch();settle();assertEquals(0,controller.get().getSharedPreferences("living",0).getInt("weatherCity",-1));
+        assertEquals(WeatherScenes.Scene.SUNNY,photoScene((View)field("weeklyPhoto")));
+        cards[5].performClick();settle();assertEquals(5,controller.get().getSharedPreferences("living",0).getInt("weatherCity",-1));assertEquals(WeatherScenes.Scene.STORM,photoScene((View)field("weeklyPhoto")));
+        ((View)field("otherCities")).performClick();settle();assertEquals(WeatherScenes.Scene.SUNNY,photoScene(photos[0]));assertEquals(9,((java.util.Set<?>)field("requestedCities")).size());
+    }
+    @Test public void dismissingCityPickerDropsLateCallbacksAndReleasesArtwork()throws Exception{
+        ((View)field("otherCities")).performClick();View[] photos=(View[])field("cityPhotos");dialog.dismiss();int known=((java.util.Map<?,?>)field("cityReadings")).size();
+        for(int i=0;i<4;i++){Thread.sleep(40);shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(100));}
+        assertEquals(known,((java.util.Map<?,?>)field("cityReadings")).size());assertNull(field("previewWeather"));assertNull(field("scenes"));
+        for(View photo:photos)assertNull(photoBitmap(photo));assertEquals(0,controller.get().getSharedPreferences("living",0).getInt("weatherCity",0));
+    }
+
 }

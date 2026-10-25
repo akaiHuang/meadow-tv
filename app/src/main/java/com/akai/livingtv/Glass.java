@@ -14,6 +14,7 @@ import java.util.function.Consumer;
 
 /** A small, one-shot CPU blur. Never samples another app or keeps a render loop. */
 final class Glass {
+    static final float PANEL_RADIUS=54f;
     private static final Handler MAIN=new Handler(Looper.getMainLooper());
     // At most one active blur and one waiting capture. Idle panels retain no worker thread.
     private static final ThreadPoolExecutor WORKER=new ThreadPoolExecutor(1,1,10,TimeUnit.SECONDS,
@@ -58,8 +59,11 @@ final class Glass {
     }
     /** One full-scene capture shared by the dimmed backdrop and all panel materials. */
     static Request requestScene(View scene,Resources resources,Consumer<Scene> ready) {
+        return requestScene(scene,resources,7,ready);
+    }
+    static Request requestScene(View scene,Resources resources,int blurRadius,Consumer<Scene> ready) {
         int width=Math.max(1,scene.getWidth()),height=Math.max(1,scene.getHeight());
-        return request(scene,resources,0,new Rect(0,0,width,height),blurred->
+        return request(scene,resources,0,new Rect(0,0,width,height),blurRadius,blurred->
                 ready.accept(new Scene(((Frost)blurred).bitmap,((Frost)blurred).clear,width,height)));
     }
     static final class Scene {
@@ -74,9 +78,13 @@ final class Glass {
         }
     }
     static Request request(View scene,Resources resources,float radius,Rect region,Consumer<Drawable> ready) {
+        return request(scene,resources,radius,region,7,ready);
+    }
+    private static Request request(View scene,Resources resources,float radius,Rect region,int blurRadius,Consumer<Drawable> ready) {
         if(Looper.myLooper()!=Looper.getMainLooper())throw new IllegalStateException("Glass capture must run on the UI thread");
         if(ready==null)throw new IllegalArgumentException("Glass callback is required");
-        Request request=new Request(capture(scene,region),radius,ready);
+        if(blurRadius<1||blurRadius>7)throw new IllegalArgumentException("Blur radius must stay within the small sample budget");
+        Request request=new Request(capture(scene,region),radius,blurRadius,ready);
         // Only UI callers enqueue. Removing a queued capture before execute leaves room
         // even if the worker concurrently picks it up; running work owns its own bitmap.
         Runnable displaced=WORKER.getQueue().poll();
@@ -97,20 +105,20 @@ final class Glass {
         int[] pixels=new int[w*h],scratch=new int[w*h];bitmap.getPixels(pixels,0,w,0,0,w,h);
         for(int i=0;i<3;i++) {
             if(request!=null&&request.cancelled)return false;
-            pass(pixels,scratch,w,h,true);
+            pass(pixels,scratch,w,h,true,request==null?7:request.blurRadius);
             if(request!=null&&request.cancelled)return false;
-            pass(scratch,pixels,w,h,false);
+            pass(scratch,pixels,w,h,false,request==null?7:request.blurRadius);
         }
         if(request!=null&&request.cancelled)return false;
         bitmap.setPixels(pixels,0,w,0,0,w,h);return true;
     }
-    private static void pass(int[] a,int[] b,int w,int h,boolean horizontal) {
-        int lines=horizontal?h:w,length=horizontal?w:h,r=7;
+    private static void pass(int[] a,int[] b,int w,int h,boolean horizontal,int r) {
+        int lines=horizontal?h:w,length=horizontal?w:h,window=r*2+1;
         for(int line=0;line<lines;line++) {
             int red=0,green=0,blue=0;
             for(int k=-r;k<=r;k++){int c=a[at(line,Math.max(0,Math.min(length-1,k)),w,horizontal)];red+=(c>>16)&255;green+=(c>>8)&255;blue+=c&255;}
             for(int x=0;x<length;x++) {
-                b[at(line,x,w,horizontal)]=0xFF000000|((red/15)<<16)|((green/15)<<8)|(blue/15);
+                b[at(line,x,w,horizontal)]=0xFF000000|((red/window)<<16)|((green/window)<<8)|(blue/window);
                 int old=a[at(line,Math.max(0,x-r),w,horizontal)],next=a[at(line,Math.min(length-1,x+r+1),w,horizontal)];
                 red+=((next>>16)&255)-((old>>16)&255);green+=((next>>8)&255)-((old>>8)&255);blue+=(next&255)-(old&255);
             }
@@ -134,10 +142,11 @@ final class Glass {
     static final class Request implements Runnable {
         private Bitmap captured,completed;private ClearImage completedClear;
         private final float radius;
+        private final int blurRadius;
         private Consumer<Drawable> callback;
         private volatile boolean cancelled;
         private final Runnable delivery=this::deliver;
-        private Request(Bitmap captured,float radius,Consumer<Drawable> callback){this.captured=captured;this.radius=radius;this.callback=callback;}
+        private Request(Bitmap captured,float radius,int blurRadius,Consumer<Drawable> callback){this.captured=captured;this.radius=radius;this.blurRadius=blurRadius;this.callback=callback;}
         void cancel() {
             synchronized(this) {
                 cancelled=true;callback=null;

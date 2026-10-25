@@ -110,6 +110,31 @@ public class HomeFlowTest {
         settle();ImageView background=(ImageView)field("backdrop");assertNotNull("Selected program artwork was not loaded",background.getDrawable());assertTrue("Crossfade must leave a visible background",background.getAlpha()>0.5f);capture("native-home-simulation.png");
         ((View)field("controlBadge")).performClick();settle();assertEquals("Control-center focus must preserve selected provider",1,field("appIndex"));capture("native-glass-simulation.png");
     }
+    @Test public void controlCenterBlursAndDimsHomeWhileKeepingItsActionsAboveTheBackdrop()throws Exception{
+        settle();Bitmap stripes=Bitmap.createBitmap(320,180,Bitmap.Config.ARGB_8888);Canvas canvas=new Canvas(stripes);Paint paint=new Paint();
+        for(int x=0;x<320;x++){paint.setColor((x/4)%2==0?Color.WHITE:Color.BLACK);canvas.drawRect(x,0,x+1,180,paint);}
+        ImageView background=(ImageView)field("backdrop");background.setImageBitmap(stripes);background.setAlpha(1);((ImageView)field("incomingBackdrop")).setAlpha(0);
+        FrameLayout stage=(FrameLayout)field("stage");Bitmap before=Bitmap.createBitmap(1920,1080,Bitmap.Config.ARGB_8888);stage.draw(new Canvas(before));
+        ((View)field("controlBadge")).performClick();settle();View frost=(View)field("controlBackdrop");assertNotNull(frost.getBackground());assertEquals(View.VISIBLE,frost.getVisibility());assertFalse(frost.isFocusable());
+        assertTrue("Only home is covered; control-center actions remain crisp above the blur",stage.indexOfChild((View)field("controls"))>stage.indexOfChild(frost));
+        Bitmap after=Bitmap.createBitmap(1920,1080,Bitmap.Config.ARGB_8888);stage.draw(new Canvas(after));
+        double oldEdges=0,newEdges=0,oldLight=0,newLight=0;
+        for(int x=100;x<400;x++){oldLight+=Color.red(before.getPixel(x,900));newLight+=Color.red(after.getPixel(x,900));oldEdges+=Math.abs(Color.red(before.getPixel(x,900))-Color.red(before.getPixel(x+1,900)));newEdges+=Math.abs(Color.red(after.getPixel(x,900))-Color.red(after.getPixel(x+1,900)));}
+        assertTrue("The home image must visibly soften, not just acquire a dark overlay",newEdges<oldEdges*.25);
+        assertTrue("The captured home must also become darker",newLight<oldLight*.8);
+        android.graphics.drawable.Drawable firstScene=frost.getBackground();Bitmap loaded=Bitmap.createBitmap(320,180,Bitmap.Config.ARGB_8888);loaded.eraseColor(Color.rgb(40,100,160));
+        invoke("crossfade",new Class<?>[]{Bitmap.class,String.class},loaded,"loaded-after-opening-controls");settle();
+        assertNotSame("Artwork arriving after opening must refresh the snapshot once",firstScene,frost.getBackground());
+        stage.draw(new Canvas(after));assertTrue("The refreshed blur follows the new blue artwork",Color.blue(after.getPixel(150,900))>Color.red(after.getPixel(150,900)));
+        activity.onBackPressed();settle();assertEquals(View.INVISIBLE,frost.getVisibility());assertNull("Closing releases the captured scene",frost.getBackground());
+        before.recycle();after.recycle();stripes.recycle();
+    }
+    @Test public void rapidControlReopenAndLifecycleReturnCannotLeaveAStaleBackdrop()throws Exception{
+        settle();View badge=(View)field("controlBadge");badge.performClick();activity.onBackPressed();badge.performClick();settle();
+        View frost=(View)field("controlBackdrop");assertEquals(View.VISIBLE,frost.getVisibility());assertNotNull(frost.getBackground());assertTrue((Boolean)field("controlsOpen"));
+        controller.pause().stop();assertEquals(View.INVISIBLE,frost.getVisibility());assertNull(frost.getBackground());controller.start().resume();settle();assertEquals(View.VISIBLE,frost.getVisibility());assertNotNull("Returning from system settings refreshes the home snapshot",frost.getBackground());
+        assertTrue("The backdrop intercepts pointer clicks instead of opening apps behind the controls",frost.isClickable());frost.performClick();settle();assertEquals(View.INVISIBLE,frost.getVisibility());assertNull(frost.getBackground());assertTrue(((View)field("controlBadge")).isFocusable());
+    }
     @Test public void hdmiPreviewFallsBackWithoutHardwareAndSuspendsBehindControls()throws Exception{
         settle();HdmiPreview preview=(HdmiPreview)field("hdmiPreview");assertFalse("No hardware session should be running without an HDMI input",preview.isRunning());assertEquals(View.VISIBLE,preview.getVisibility());
         ((View)field("controlBadge")).performClick();settle();assertEquals(View.INVISIBLE,preview.getVisibility());assertFalse(preview.isRunning());activity.onBackPressed();settle();assertEquals(View.VISIBLE,preview.getVisibility());

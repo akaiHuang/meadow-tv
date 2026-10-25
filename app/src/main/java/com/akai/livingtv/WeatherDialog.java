@@ -18,11 +18,11 @@ import java.time.ZoneId;
 import java.util.*;
 import java.util.function.Consumer;
 
-/** Weekly weather and a separate city rail. Only opening/confirming requests weather. */
+/** Weekly weather and an independent city rail with cached, condition-specific imagery. */
 final class WeatherDialog {
     private static final int WHITE=0xFFF0F5F2, SOFT=0xFFC1D0CA, DIM=0xFFA6BCAF;
     private static final int PANEL_X=288,PANEL_Y=162,PANEL_WIDTH=1344,PANEL_HEIGHT=756;
-    private static final float PANEL_RADIUS=226.8f;
+    private static final float PANEL_RADIUS=Glass.PANEL_RADIUS;
     private final MainActivity activity;
     private WeatherRepository.Reading reading;
     private AlertDialog dialog;
@@ -39,7 +39,11 @@ final class WeatherDialog {
     private final ImageView[] checks=new ImageView[cities.length];
     private final Map<Integer,WeatherRepository.Reading> cityReadings=new HashMap<>();
     private final List<PhotoView> photos=new ArrayList<>();
-    private Bitmap photo;
+    private final PhotoView[] cityPhotos=new PhotoView[cities.length];
+    private PhotoView weeklyPhoto;
+    private WeatherScenes scenes;
+    private WeatherRepository previewWeather;
+    private final Set<Integer> requestedCities=new HashSet<>();
     private int selected,focusedCity,requestGeneration,animationGeneration;
     private boolean alive,pickerOpen,reduceMotion,needsCityLayout;
 
@@ -51,8 +55,7 @@ final class WeatherDialog {
     void open(){
         if(alive)return;alive=true;
         reduceMotion=activity.getSharedPreferences("living",0).getBoolean("reduceMotion",Build.VERSION.SDK_INT<=28);
-        BitmapFactory.Options options=new BitmapFactory.Options();options.inPreferredConfig=Bitmap.Config.RGB_565;options.inSampleSize=2;options.inScaled=false;
-        photo=BitmapFactory.decodeResource(activity.getResources(),R.drawable.weather_scene,options);
+        scenes=new WeatherScenes(activity.getResources());
         stage=new FrameLayout(activity);stage.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);stage.setClipChildren(true);stage.setBackgroundColor(0x66020909);
         FrameLayout root=new FrameLayout(activity){
             @Override protected void onMeasure(int width,int height){setMeasuredDimension(MeasureSpec.getSize(width),MeasureSpec.getSize(height));stage.measure(MeasureSpec.makeMeasureSpec(1920,MeasureSpec.EXACTLY),MeasureSpec.makeMeasureSpec(1080,MeasureSpec.EXACTLY));}
@@ -73,7 +76,7 @@ final class WeatherDialog {
         GradientDrawable glass=new GradientDrawable(GradientDrawable.Orientation.TL_BR,new int[]{0xB34C6860,0xCA1B2B2B,0xE010201E});glass.setCornerRadius(PANEL_RADIUS);weeklyPanel.setBackground(glass);
         GradientDrawable rim=Glass.surface(Color.TRANSPARENT,0x80D9F7E7,PANEL_RADIUS);rim.setStroke(3,0x80D9F7E7);weeklyPanel.setForeground(rim);
         put(stage,weeklyPanel,PANEL_X,PANEL_Y,PANEL_WIDTH,PANEL_HEIGHT);
-        put(weeklyPanel,photo(.5f),0,0,PANEL_WIDTH,340);
+        weeklyPhoto=photo(.5f);weeklyPhoto.setTag("weatherWeeklyPhoto");put(weeklyPanel,weeklyPhoto,0,0,PANEL_WIDTH,340);
         View readingShade=new View(activity);readingShade.setBackground(new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,new int[]{0xAC11231E,0x4011231E,0x0011231E}));put(weeklyPanel,readingShade,0,0,PANEL_WIDTH,340);
         View shade=new View(activity);shade.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0x4011231E,0x1811231E,0xF01C302C}));put(weeklyPanel,shade,0,0,PANEL_WIDTH,340);
         otherCities=pill("其他城市","cities",this::showPicker);otherCities.setTag("weatherOtherCities");put(weeklyPanel,otherCities,161,57,192,50);
@@ -107,11 +110,11 @@ final class WeatherDialog {
         cityRail.getViewTreeObserver().addOnGlobalLayoutListener(()->{if(alive&&pickerOpen&&needsCityLayout&&cityRow.getWidth()>0){needsCityLayout=false;centerCity(false);}});
         railCount=text("1 / "+cities.length,18,0xFFA4BCAD);put(pickerPanel,railCount,230,866,500,36);
         TextView backNote=text("按返回鍵保留目前城市",18,0xFFA4BCAD);backNote.setGravity(Gravity.RIGHT|Gravity.CENTER_VERTICAL);put(pickerPanel,backNote,1010,866,680,36);
-        TextView photoNote=text("城市相片為共同氛圍示意，非現場或即時影像。",16,0xFF829C8C);photoNote.setGravity(Gravity.CENTER);put(pickerPanel,photoNote,200,1000,1520,36);
+        TextView photoNote=text("背景依各城市天況切換，為氛圍示意，非即時影像。",16,0xFF829C8C);photoNote.setGravity(Gravity.CENTER);put(pickerPanel,photoNote,200,1000,1520,36);
     }
     private void buildCity(int index){
         final int choice=index;RoundedFrame card=new RoundedFrame(26);card.setId(View.generateViewId());card.setTag("weatherCity"+index);card.setFocusable(true);card.setClickable(true);card.setDefaultFocusHighlightEnabled(false);card.setBackground(Glass.surface(0xFF243A31,0x44E8FFF8,26));
-        put(card,photo((15+(index*19)%76)/100f),0,0,340,440);
+        cityPhotos[index]=photo((15+(index*19)%76)/100f);cityPhotos[index].setTag("weatherCityPhoto"+index);put(card,cityPhotos[index],0,0,340,440);
         View shade=new View(activity);shade.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0x060C2119,0x100C2119,0xF50C2119}));put(card,shade,0,0,340,440);
         FrameLayout current=new FrameLayout(activity);current.setBackground(Glass.surface(0xD0348055,0x5589E9B1,20));put(card,current,148,28,158,40);currentMarks[index]=current;
         ImageView check=new ImageView(activity);check.setImageDrawable(new Mark("check",0xFFF3FFF7));put(current,check,10,8,24,24);checks[index]=check;
@@ -122,7 +125,7 @@ final class WeatherDialog {
         card.setOnFocusChangeListener((v,on)->{if(on&&pickerOpen){focusedCity=choice;centerCity(!reduceMotion);}});card.setOnClickListener(v->confirmCity(choice));
         LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(340,440);params.rightMargin=index==cities.length-1?0:32;cityRow.addView(card,params);cities[index]=card;
     }
-    private void showPicker(){if(alive){focusedCity=selected;needsCityLayout=true;setMode(true,true);}}
+    private void showPicker(){if(alive){focusedCity=selected;needsCityLayout=true;setMode(true,true);requestCityPreviews();}}
     private void showWeekly(){if(alive)setMode(false,true);}
     private void setMode(boolean picker,boolean animate){
         pickerOpen=picker;int generation=++animationGeneration;
@@ -143,8 +146,29 @@ final class WeatherDialog {
     }
     private void requestReading(boolean persist){
         int index=selected,generation=++requestGeneration;
-        Consumer<WeatherRepository.Reading> done=value->{if(!alive||generation!=requestGeneration||selected!=index||value==null||!WeatherRepository.CITIES[index].equals(value.city))return;reading=value;cityReadings.put(index,value);paintReading();paintCities();};
+        Consumer<WeatherRepository.Reading> done=value->{if(!alive||generation!=requestGeneration||selected!=index||!rememberReading(index,value))return;reading=value;paintReading();paintCities();};
         if(persist)activity.selectWeatherCity(index,done);else activity.loadWeatherForecast(index,done);
+    }
+    private void requestCityPreviews(){
+        // One request per city during this visit; the repository reuses its 30-minute
+        // cache and serializes refreshes. Merely moving focus never starts requests.
+        if(previewWeather==null)previewWeather=new WeatherRepository(activity);
+        for(int index=0;index<cities.length;index++){
+            final int choice=index;if(!requestedCities.add(choice))continue;
+            previewWeather.load(choice,value->{
+                if(!alive||!rememberReading(choice,value))return;
+                if(selected==choice){reading=value;paintReading();}
+                paintCities();
+            });
+        }
+    }
+    private boolean rememberReading(int index,WeatherRepository.Reading value){
+        // Dismiss removes the window before its queued OnDismiss callback runs.
+        // Already queued weather replies must not repaint the closed panel meanwhile.
+        if(!alive||dialog==null||!dialog.isShowing()||value==null||!WeatherRepository.CITIES[index].equals(value.city))return false;
+        WeatherRepository.Reading previous=cityReadings.get(index);
+        if(previous!=null&&previous.updatedAtMillis>value.updatedAtMillis)return false;
+        cityReadings.put(index,value);return true;
     }
     private void centerCity(boolean smooth){
         if(!pickerOpen||cityRail==null)return;int left=288+focusedCity*372;int max=Math.max(0,cityRow.getWidth()-cityRail.getWidth());int target=Math.max(0,Math.min(max,left-(1920-340)/2));
@@ -152,9 +176,9 @@ final class WeatherDialog {
         backWeather.setNextFocusDownId(cities[focusedCity].getId());pickerClose.setNextFocusDownId(cities[focusedCity].getId());railCount.setText((focusedCity+1)+" / "+cities.length);
     }
     private void back(){if(!alive)return;if(pickerOpen)showWeekly();else dialog.dismiss();}
-    private void updateReading(WeatherRepository.Reading value){if(!alive||value==null||!value.city.equals(WeatherRepository.CITIES[selected]))return;reading=value;cityReadings.put(selected,value);paintReading();paintCities();}
     private void paintReading(){
         city.setText(WeatherRepository.CITIES[selected]);boolean matches=reading!=null&&WeatherRepository.CITIES[selected].equals(reading.city);int code=matches?reading.code:-1;
+        weeklyPhoto.update(matches?reading:null);
         temperature.setText(matches?currentDegrees(reading):"—");condition.setText(matches?(code>=0?WeatherRepository.description(code):reading.days.isEmpty()?"天氣暫不可用":"天況未提供"):"正在讀取天氣…");glyph.update(code,!matches||reading.day);
         daysRow.removeAllViews();LocalDate today=LocalDate.now(ZoneId.of("Asia/Taipei"));
         for(int index=0;index<7;index++){
@@ -176,17 +200,17 @@ final class WeatherDialog {
         for(int index=0;index<cities.length;index++){
             if(cities[index]==null)continue;boolean current=index==selected;cities[index].setSelected(current);currentMarks[index].setVisibility(current?View.VISIBLE:View.INVISIBLE);checks[index].setVisibility(current?View.VISIBLE:View.INVISIBLE);
             cities[index].setContentDescription(WeatherRepository.CITIES[index]+(current?"，目前城市":"")+"，按確認查看一週天氣");
-            WeatherRepository.Reading cached=cityReadings.get(index);citySummaries[index].setText(cached!=null&&cached.code>=0?currentDegrees(cached)+" · "+WeatherRepository.description(cached.code):"查看一週天氣");
+            WeatherRepository.Reading cached=cityReadings.get(index);cityPhotos[index].update(cached);citySummaries[index].setText(cached!=null&&cached.code>=0?currentDegrees(cached)+" · "+WeatherRepository.description(cached.code):cached==null?"正在讀取天氣…":"天氣暫不可用");
         }
     }
     private void finish(){
         alive=false;++requestGeneration;++animationGeneration;weeklyPanel.animate().cancel();pickerPanel.animate().cancel();for(View card:cities)card.animate().cancel();
-        for(PhotoView view:photos)view.clear();photos.clear();photo=null;
+        for(PhotoView view:photos)view.clear();photos.clear();if(scenes!=null){scenes.close();scenes=null;}if(previewWeather!=null){previewWeather.close();previewWeather=null;}requestedCities.clear();
     }
     private String currentDegrees(WeatherRepository.Reading value){try{double number=Double.parseDouble(value.text.split("°",2)[0].trim());return Double.isFinite(number)?Math.round(number)+"°":"—";}catch(Exception ignored){return "—";}}
     private static String degrees(Double value){return value==null||!Double.isFinite(value)?"—":Math.round(value)+"°";}
     private String stamp(long time){SimpleDateFormat format=new SimpleDateFormat("MM/dd HH:mm",Locale.TAIWAN);format.setTimeZone(TimeZone.getTimeZone("Asia/Taipei"));return format.format(new Date(time));}
-    private PhotoView photo(float position){PhotoView view=new PhotoView(photo,position);photos.add(view);return view;}
+    private PhotoView photo(float position){PhotoView view=new PhotoView(position);photos.add(view);return view;}
     private TextView pill(String caption,String mark,Runnable action){
         TextView button=text("",22,WHITE);button.setId(View.generateViewId());button.setGravity(Gravity.CENTER);button.setFocusable(true);button.setClickable(true);button.setDefaultFocusHighlightEnabled(false);button.setBackground(pillSurface(25));
         Mark icon=new Mark(mark,WHITE);icon.setBounds(0,0,24,24);SpannableString group=new SpannableString("\uFFFC"+caption);group.setSpan(new InlineMark(icon,9),0,1,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);button.setText(group);button.setContentDescription(caption);button.setOnClickListener(v->action.run());return button;
@@ -203,11 +227,23 @@ final class WeatherDialog {
         @Override protected void dispatchDraw(Canvas canvas){int save=canvas.save();canvas.clipPath(clip);super.dispatchDraw(canvas);canvas.restoreToCount(save);}
     }
     private final class PhotoView extends View {
-        private Bitmap bitmap;private final float position;private final Matrix matrix=new Matrix();private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG);
-        PhotoView(Bitmap bitmap,float position){super(activity);this.bitmap=bitmap;this.position=position;setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);}
-        @Override protected void onSizeChanged(int width,int height,int oldWidth,int oldHeight){if(bitmap==null)return;float scale=Math.max(width/(float)bitmap.getWidth(),height/(float)bitmap.getHeight());matrix.setScale(scale,scale);matrix.postTranslate((width-bitmap.getWidth()*scale)*position,(height-bitmap.getHeight()*scale)*.5f);}
-        @Override protected void onDraw(Canvas canvas){if(bitmap!=null)canvas.drawBitmap(bitmap,matrix,paint);}
-        void clear(){bitmap=null;invalidate();}
+        private Bitmap bitmap;private final float position;private final Matrix matrix=new Matrix();private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG),wash=new Paint();
+        private WeatherScenes.Scene scene;private boolean night;private int generation;
+        PhotoView(float position){super(activity);this.position=position;setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);setBackgroundColor(0xFF233B3B);}
+        void update(WeatherRepository.Reading value){
+            WeatherScenes.Scene next=WeatherScenes.scene(value);boolean dark=value!=null&&!value.day;
+            if(scene==next&&night==dark)return;scene=next;night=dark;int request=++generation;
+            bitmap=null;invalidate();WeatherScenes owner=scenes;
+            if(owner!=null)owner.load(next,image->{if(!alive||owner!=scenes||request!=generation)return;bitmap=image;positionBitmap();invalidate();});
+        }
+        private void positionBitmap(){if(bitmap==null)return;float scale=Math.max(getWidth()/(float)bitmap.getWidth(),getHeight()/(float)bitmap.getHeight());matrix.setScale(scale,scale);matrix.postTranslate((getWidth()-bitmap.getWidth()*scale)*position,(getHeight()-bitmap.getHeight()*scale)*.5f);}
+        @Override protected void onSizeChanged(int width,int height,int oldWidth,int oldHeight){positionBitmap();}
+        @Override protected void onDraw(Canvas canvas){
+            if(bitmap!=null)canvas.drawBitmap(bitmap,matrix,paint);
+            if(night&&scene!=WeatherScenes.Scene.NIGHT){wash.setColor(0x790B1730);canvas.drawRect(0,0,getWidth(),getHeight(),wash);}
+            if(scene==WeatherScenes.Scene.SNOW){wash.setColor(0x55D8E8EF);canvas.drawRect(0,0,getWidth(),getHeight(),wash);wash.setColor(0xAADDECF2);for(int i=0;i<30;i++){float x=((i*73+17)%337)/337f*getWidth(),y=((i*47+29)%421)/421f*getHeight();canvas.drawCircle(x,y,1.6f+(i%3),wash);}}
+        }
+        void clear(){++generation;bitmap=null;invalidate();}
     }
     private static final class InlineMark extends ImageSpan {
         private final int gap;InlineMark(Drawable icon,int gap){super(icon);this.gap=gap;}

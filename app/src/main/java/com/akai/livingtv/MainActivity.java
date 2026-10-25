@@ -44,6 +44,8 @@ public final class MainActivity extends Activity {
     private static final java.util.regex.Pattern SEASON_SUFFIX=java.util.regex.Pattern.compile(": (?:Limited Series|Season \\d+)$");
     private static final DecelerateInterpolator EASE_OUT=new DecelerateInterpolator();
     private Glass.Request controlGlass;
+    private View controlBackdrop;
+    private long controlGeneration;
     private Glass.Request homeGlass;private Glass.Scene homeScene;
     private Glass.Request modalGlass;private Glass.Scene modalScene;private ImageView modalBackdrop;
     private final Map<AlertDialog,Rect> dialogRegions=new IdentityHashMap<>();
@@ -107,6 +109,9 @@ public final class MainActivity extends Activity {
         assistantBadge=control(stage,"Meadow",R.drawable.ic_mic,1375,65,270,68,()->showAssistant());
         assistantConnectionChanged(false);
         controlBadge=control(stage,"控制中心",R.drawable.ic_settings,1670,65,190,68,()->toggleControls(true));
+        controlBackdrop=new View(this);controlBackdrop.setTag("controlBackdrop");
+        controlBackdrop.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);controlBackdrop.setFocusable(false);controlBackdrop.setOnClickListener(v->toggleControls(false));
+        controlBackdrop.setForeground(new ColorDrawable(0x66040910));controlBackdrop.setVisibility(View.INVISIBLE);place(controlBackdrop,0,0,1920,1080);
         controls=new FrameLayout(this);controls.setClipChildren(false);controls.setClipToPadding(false);
         place(controls,1375,148,485,570);controls.setVisibility(View.INVISIBLE);
         TextView title=text("控制中心",31,WHITE,"sans-serif-medium");add(controls,title,8,0,280,64);
@@ -276,21 +281,42 @@ public final class MainActivity extends Activity {
         link(input,input,settings,audio,input);link(settings,input,cast,audio,settings);link(cast,settings,closeControl,timer,cast);link(closeControl,cast,closeControl,timer,closeControl);
     }
     private void toggleControls(boolean open){
-        if(controlsOpen==open)return;controlsOpen=open;changingFocus=true;controls.animate().cancel();if(controlGlass!=null){controlGlass.cancel();controlGlass=null;}
+        if(controlsOpen==open)return;controlsOpen=open;changingFocus=true;long generation=++controlGeneration;
+        controls.animate().cancel();controlBackdrop.animate().cancel();if(controlGlass!=null){controlGlass.cancel();controlGlass=null;}
         // Keep whole app cards to the left of the expanded controls instead of
         // leaving part of the fifth banner visible behind the power module.
         appScroll.setClipBounds(open?new Rect(0,0,1166,220):null);
         if(open){
             if(miniPlayer!=null)miniPlayer.underControls(true);handler.removeCallbacks(resumePreview);hdmiPreview.stop();hdmiPreview.setFocusable(false);hdmiPreview.setVisibility(View.INVISIBLE);
             controls.setVisibility(View.INVISIBLE);
-            controlGlass=Glass.requestScene(stage,getResources(),glass->{if(started&&controlsOpen)paintControlScene(glass);});
+            // Capture the undimmed home once; both the backdrop and capsule materials
+            // share the same bounded sample. The controls stay crisp above this layer.
+            controlBackdrop.setVisibility(View.INVISIBLE);controlBackdrop.setBackground(null);refreshControlScene();
+            controlBackdrop.setVisibility(View.VISIBLE);controlBackdrop.setAlpha(0);
+            controlBackdrop.animate().alpha(1).setDuration(lowMotion?0:220).setInterpolator(EASE_OUT).start();
             controls.setVisibility(View.VISIBLE);controls.setAlpha(0);controls.setTranslationX(64);
             for(View v:appTiles)v.setFocusable(false);for(View v:programTiles)v.setFocusable(false);controlBadge.setFocusable(false);assistantBadge.setFocusable(false);weatherBadge.setFocusable(false);
             controls.animate().alpha(1).translationX(0).setDuration(220).setInterpolator(EASE_OUT).withLayer().withEndAction(()->{if(controlsOpen)profile.requestFocus();changingFocus=false;}).start();
         }else{
-            if(miniPlayer!=null)miniPlayer.underControls(false);for(View v:appTiles)v.setFocusable(true);for(View v:programTiles)v.setFocusable(true);controlBadge.setFocusable(true);assistantBadge.setFocusable(true);weatherBadge.setFocusable(true);controlBadge.requestFocus();hdmiPreview.setFocusable(true);changingFocus=false;
+            controlBackdrop.animate().alpha(0).setDuration(lowMotion?0:180).withEndAction(()->{if(!controlsOpen&&generation==controlGeneration)clearControlBackdrop();}).start();
+            if(miniPlayer!=null)miniPlayer.underControls(false);for(View v:appTiles)v.setFocusable(true);for(View v:programTiles)v.setFocusable(true);controlBadge.setFocusable(true);assistantBadge.setFocusable(true);weatherBadge.setFocusable(true);controlBadge.requestFocusFromTouch();hdmiPreview.setFocusable(true);changingFocus=false;
             controls.animate().alpha(0).translationX(64).setDuration(180).withLayer().withEndAction(()->{if(!controlsOpen){controls.setVisibility(View.INVISIBLE);hdmiPreview.setVisibility(View.VISIBLE);refreshHomeGlass();syncPreview();}}).start();
         }
+    }
+    private void clearControlBackdrop(){
+        ++controlGeneration;if(controlGlass!=null){controlGlass.cancel();controlGlass=null;}
+        if(controlBackdrop!=null){controlBackdrop.animate().cancel();controlBackdrop.setVisibility(View.INVISIBLE);controlBackdrop.setBackground(null);}
+    }
+    private void refreshControlScene(){
+        if(!started||!controlsOpen||openDialogs>0)return;
+        if(controlGlass!=null)controlGlass.cancel();
+        long generation=++controlGeneration;int controlVisibility=controls.getVisibility(),backdropVisibility=controlBackdrop.getVisibility();
+        controls.setVisibility(View.INVISIBLE);controlBackdrop.setVisibility(View.INVISIBLE);
+        controlGlass=Glass.requestScene(stage,getResources(),2,glass->{
+            if(!started||!controlsOpen||generation!=controlGeneration)return;
+            controlGlass=null;controlBackdrop.setBackground(glass.backdrop());paintControlScene(glass);
+        });
+        controls.setVisibility(controlVisibility);controlBackdrop.setVisibility(backdropVisibility);
     }
     private void link(View v,View left,View right,View up,View down){v.setNextFocusLeftId(left.getId());v.setNextFocusRightId(right.getId());v.setNextFocusUpId(up.getId());v.setNextFocusDownId(down.getId());}
     private String selectedProvider(){if(apps[appIndex].equals("com.spotify.tv.android")||apps[appIndex].equals("meadow.podcasts"))return "spotify";return appIndex==1?"netflix":appIndex==2?"hbo":appIndex==3?"apple":"";}
@@ -362,7 +388,8 @@ public final class MainActivity extends Activity {
     /** One background-only capture after an artwork transition; never samples a TV surface. */
     private void refreshHomeGlass(){
         if(homeGlass!=null){homeGlass.cancel();homeGlass=null;}
-        if(!started||controlsOpen||openDialogs>0||backdrop.getWidth()==0)return;
+        if(!started||openDialogs>0||backdrop.getWidth()==0)return;
+        if(controlsOpen){refreshControlScene();return;}
         homeGlass=Glass.requestScene(backdrop,getResources(),scene->{homeGlass=null;if(!started)return;homeScene=scene;paintHomeGlass();});
     }
     private void paintHomeGlass(){
@@ -427,6 +454,7 @@ public final class MainActivity extends Activity {
         try{connectivity.registerDefaultNetworkCallback(networkCallback);}catch(Exception ignored){}
         updateNetwork();
         repository=new FeedRepository(this);repository.load(data->{if(started){entries.clear();entries.addAll(data);for(FeedRepository.Entry e:data)MediaQueue.get(this).register(e);updatePrograms(true);}});
+        if(controlsOpen){controlsOpen=false;toggleControls(true);}
     }
     @Override protected void onStop(){
         sounds.stop();miniPlayer.stop();if(weather!=null){weather.close();weather=null;}started=false;for(AlertDialog d:new ArrayList<>(shownDialogs))if(d.isShowing())d.dismiss();++artworkGeneration;handler.removeCallbacks(resumePreview);if(hdmiPreview!=null)hdmiPreview.stop();handler.removeCallbacks(rotateArt);if(backgroundFade!=null)backgroundFade.cancel();backdrop.animate().cancel();incomingBackdrop.animate().cancel();if(assistant!=null)assistant.close();
@@ -436,7 +464,7 @@ public final class MainActivity extends Activity {
         for(View v:focusables)v.animate().cancel();
         if(repository!=null){repository.close();repository=null;}
         ++programGeneration;requestedProgramImages.clear();
-        if(controlGlass!=null){controlGlass.cancel();controlGlass=null;}
+        clearControlBackdrop();
         if(homeGlass!=null){homeGlass.cancel();homeGlass=null;}
         clearModalScene();
         super.onStop();
@@ -579,12 +607,12 @@ public final class MainActivity extends Activity {
         if(window!=null&&cornerFraction>0){WindowManager.LayoutParams bounds=window.getAttributes();window.setBackgroundDrawable(surface(0xE0252A34,0x6FD8E6EB,panelRadius(dialog,bounds.width,bounds.height)));}
         dialog.setOnDismissListener(d->{dialogClosed();after.run();});
     }
-    private float panelRadius(AlertDialog dialog,int width,int height){Float fraction=dialogCornerFractions.get(dialog);return fraction==null?54:Math.min(width,height)*fraction;}
+    private float panelRadius(AlertDialog dialog,int width,int height){Float fraction=dialogCornerFractions.get(dialog);return fraction==null?Glass.PANEL_RADIUS:Math.min(width,height)*fraction;}
     private void show(AlertDialog dialog){
         handler.removeCallbacks(resumePreview);if(hdmiPreview!=null)hdmiPreview.stop();
         openDialogs++;shownDialogs.add(dialog);
         dialog.setOnDismissListener(d->dialogClosed());dialog.show();
-        Window window=dialog.getWindow();if(window!=null){window.setBackgroundDrawable(surface(0xE0252A34,0x6FD8E6EB,54));window.setDimAmount(0.12f);window.setLayout((int)(getResources().getDisplayMetrics().widthPixels*0.51),-2);window.getDecorView().setClipToOutline(true);}
+        Window window=dialog.getWindow();if(window!=null){window.setBackgroundDrawable(surface(0xE0252A34,0x6FD8E6EB,Glass.PANEL_RADIUS));window.setDimAmount(0.12f);window.setLayout((int)(getResources().getDisplayMetrics().widthPixels*0.51),-2);window.getDecorView().setClipToOutline(true);}
         // Wait for the caller to set its final panel size. Sample the matching area
         // of the home scene, instead of stretching a fixed crop into every dialog.
         handler.post(()->{
