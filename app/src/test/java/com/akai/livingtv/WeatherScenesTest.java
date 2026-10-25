@@ -19,4 +19,13 @@ public class WeatherScenesTest {
     @Test public void missingOrUnknownWeatherDoesNotPretendToBeSunnyOrCloudy(){
         assertEquals(WeatherScenes.Scene.UNKNOWN,WeatherScenes.scene(null));assertEquals(WeatherScenes.Scene.UNKNOWN,scene(-1,true));assertEquals(WeatherScenes.Scene.UNKNOWN,scene(100,false));
     }
+    @Test public void everyCityKeepsItsOwnLandmarkRegardlessOfItsWeather(){
+        java.util.Set<Integer> resources=new java.util.HashSet<>();
+        for(int index=0;index<WeatherRepository.CITIES.length;index++){
+            String city=WeatherRepository.CITIES[index];assertEquals(index,WeatherScenes.cityIndex(city));
+            int resource=WeatherScenes.resource(city);assertTrue(resource!=0);assertTrue("Each city needs a distinct photograph",resources.add(resource));
+        }
+        assertEquals(9,resources.size());assertEquals(-1,WeatherScenes.cityIndex(null));assertEquals(0,WeatherScenes.resource("unknown"));
+        assertEquals(.5f,WeatherScenes.focalX("台北"),.001f);assertEquals(.85f,WeatherScenes.focalX("新北"),.001f);assertEquals(.35f,WeatherScenes.focalX("花蓮"),.001f);
+    }
 }

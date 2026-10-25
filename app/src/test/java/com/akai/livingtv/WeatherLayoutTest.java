@@ -42,6 +42,8 @@ public class WeatherLayoutTest {
     }
     private WeatherScenes.Scene photoScene(View photo)throws Exception{Field scene=photo.getClass().getDeclaredField("scene");scene.setAccessible(true);return (WeatherScenes.Scene)scene.get(photo);}
     private Bitmap photoBitmap(View photo)throws Exception{Field bitmap=photo.getClass().getDeclaredField("bitmap");bitmap.setAccessible(true);return (Bitmap)bitmap.get(photo);}
+    private String photoCity(View photo)throws Exception{Field city=photo.getClass().getDeclaredField("cityName");city.setAccessible(true);return (String)city.get(photo);}
+    private void awaitPhoto(View photo)throws Exception{for(int attempt=0;attempt<8&&photoBitmap(photo)==null;attempt++)settle();assertNotNull(photoBitmap(photo));}
     @Test public void cityPreviewsUseTheirOwnConditionsAndBrowsingKeepsCurrentCity()throws Exception{
         dialog.dismiss();int[] codes={0,3,61,0,45,95,71,61,0};
         android.content.SharedPreferences.Editor prefs=controller.get().getSharedPreferences("living",0).edit().putInt("weatherCity",0);
@@ -49,13 +51,25 @@ public class WeatherLayoutTest {
         panel=new WeatherDialog(controller.get(),null);panel.open();dialog=(AlertDialog)field("dialog");settle();((View)field("otherCities")).performClick();settle();
         View[] photos=(View[])field("cityPhotos");WeatherScenes.Scene[] expected={WeatherScenes.Scene.SUNNY,WeatherScenes.Scene.CLOUDY,WeatherScenes.Scene.RAIN,WeatherScenes.Scene.NIGHT,WeatherScenes.Scene.FOG,WeatherScenes.Scene.STORM,WeatherScenes.Scene.SNOW,WeatherScenes.Scene.RAIN,WeatherScenes.Scene.SUNNY};
         for(int i=0;i<photos.length;i++)assertEquals("Each city must use its own weather",expected[i],photoScene(photos[i]));
-        for(int attempt=0;attempt<8;attempt++){boolean ready=true;for(View photo:photos)if(photoBitmap(photo)==null)ready=false;if(ready)break;settle();}
-        for(View photo:photos)assertNotNull(photoBitmap(photo));assertSame("Same weather shares one decoded photograph",photoBitmap(photos[0]),photoBitmap(photos[8]));
-        assertNotSame("Rain and sun must not reuse a differently cropped common picture",photoBitmap(photos[0]),photoBitmap(photos[2]));
-        FrameLayout[] cards=(FrameLayout[])field("cities");cards[5].requestFocusFromTouch();settle();assertEquals(0,controller.get().getSharedPreferences("living",0).getInt("weatherCity",-1));
+        awaitPhoto(photos[0]);awaitPhoto(photos[2]);Bitmap taipei=photoBitmap(photos[0]);
+        assertNotSame("Different cities must not reuse a differently cropped common picture",taipei,photoBitmap(photos[2]));
+        assertNull("Off-screen city photos are not decoded eagerly",photoBitmap(photos[8]));
+        FrameLayout[] cards=(FrameLayout[])field("cities");cards[8].requestFocusFromTouch();settle();awaitPhoto(photos[8]);
+        assertNotSame("Even identical sunshine must retain distinct city landmarks",taipei,photoBitmap(photos[8]));
+        assertEquals("花蓮",photoCity(photos[8]));assertNull("Scrolling releases the off-screen photo reference",photoBitmap(photos[0]));
+        cards[5].requestFocusFromTouch();settle();assertEquals(0,controller.get().getSharedPreferences("living",0).getInt("weatherCity",-1));
         assertEquals(WeatherScenes.Scene.SUNNY,photoScene((View)field("weeklyPhoto")));
         cards[5].performClick();settle();assertEquals(5,controller.get().getSharedPreferences("living",0).getInt("weatherCity",-1));assertEquals(WeatherScenes.Scene.STORM,photoScene((View)field("weeklyPhoto")));
+        assertEquals("高雄",photoCity((View)field("weeklyPhoto")));awaitPhoto((View)field("weeklyPhoto"));
         ((View)field("otherCities")).performClick();settle();assertEquals(WeatherScenes.Scene.SUNNY,photoScene(photos[0]));assertEquals(9,((java.util.Set<?>)field("requestedCities")).size());
+    }
+    @Test public void changingWeatherTreatsTheSameCityPhotoWithoutReloadingItsLandmark()throws Exception{
+        View photo=(View)field("weeklyPhoto");awaitPhoto(photo);Bitmap cityImage=photoBitmap(photo);
+        Bitmap rain=Bitmap.createBitmap(photo.getWidth(),photo.getHeight(),Bitmap.Config.ARGB_8888);photo.draw(new Canvas(rain));
+        java.lang.reflect.Method update=photo.getClass().getDeclaredMethod("update",String.class,WeatherRepository.Reading.class);update.setAccessible(true);
+        update.invoke(photo,"台北",new WeatherRepository.Reading("台北","22°",0,false));settle();assertSame("Weather does not allocate another copy of the landmark",cityImage,photoBitmap(photo));
+        Bitmap night=Bitmap.createBitmap(photo.getWidth(),photo.getHeight(),Bitmap.Config.ARGB_8888);photo.draw(new Canvas(night));
+        assertEquals(WeatherScenes.Scene.NIGHT,photoScene(photo));assertNotEquals("Day/rain and clear night must change actual rendered pixels",rain.getPixel(photo.getWidth()/2,photo.getHeight()/2),night.getPixel(photo.getWidth()/2,photo.getHeight()/2));rain.recycle();night.recycle();
     }
     @Test public void dismissingCityPickerDropsLateCallbacksAndReleasesArtwork()throws Exception{
         ((View)field("otherCities")).performClick();View[] photos=(View[])field("cityPhotos");dialog.dismiss();int known=((java.util.Map<?,?>)field("cityReadings")).size();

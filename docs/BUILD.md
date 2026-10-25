@@ -68,7 +68,7 @@ node --test bridge/voice/*.test.mjs
 一般使用者請使用預編譯的 macOS ARM64 中控：
 
 ```sh
-python3 tools/download-companion.py --tag v0.8.16-preview.1
+python3 tools/download-companion.py --tag v0.8.18-preview.1
 ```
 
 設定、配對及啟動方式見[安裝教學](GETTING-STARTED.zh-TW.md)。

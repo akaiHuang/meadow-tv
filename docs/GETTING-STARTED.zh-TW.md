@@ -1,6 +1,6 @@
 # 安裝 Meadow TV，連接你的 Codex
 
-本指南適用於 **v0.8.16-preview.1**。你可以先安裝電視 App，使用首頁、天氣與 Podcast；想使用 Meadow 助理時，再完成 Mac 與 Codex 的連接。
+本指南適用於 **v0.8.18-preview.1**。你可以先安裝電視 App，使用首頁、天氣與 Podcast；想使用 Meadow 助理時，再完成 Mac 與 Codex 的連接。
 
 ## 準備什麼
 
@@ -41,9 +41,9 @@ codex login status
 
 ## 2. 下載 Meadow TV
 
-到 [Release 下載頁](https://github.com/akaiHuang/meadow-tv/releases/tag/v0.8.16-preview.1)，取得：
+到 [Release 下載頁](https://github.com/akaiHuang/meadow-tv/releases/tag/v0.8.18-preview.1)，取得：
 
-- **MeadowTV-0.8.16-preview.1-universal.apk**：電視安裝檔，先存到 Mac 的「下載項目」。
+- **MeadowTV-0.8.18-preview.1-universal.apk**：電視安裝檔，先存到 Mac 的「下載項目」。
 - [**專案工具與原始碼（ZIP）**](https://github.com/akaiHuang/meadow-tv/archive/refs/heads/main.zip)：另行下載並解壓縮，裡面有連接工具與最新教學。
 
 在終端機輸入 `cd `（尾端保留一個空白），把解壓縮後的資料夾拖進去，再按 Enter。接下來的工具指令都在這個資料夾執行。
@@ -51,7 +51,7 @@ codex login status
 下載 Mac 中控：
 
 ```sh
-python3 tools/download-companion.py --tag v0.8.16-preview.1
+python3 tools/download-companion.py --tag v0.8.18-preview.1
 ```
 
 工具會自動核對下載檔案。看到下載成功後，再繼續下一步。
@@ -82,7 +82,7 @@ adb devices
 ```sh
 printf '電視序號：'
 read -r TV_SERIAL
-adb -s "$TV_SERIAL" install -r "$HOME/Downloads/MeadowTV-0.8.16-preview.1-universal.apk"
+adb -s "$TV_SERIAL" install -r "$HOME/Downloads/MeadowTV-0.8.18-preview.1-universal.apk"
 adb -s "$TV_SERIAL" shell am start -n com.akai.livingtv/.MainActivity
 ```
 

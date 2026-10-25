@@ -103,8 +103,18 @@ final class FeedRepository {
     private <T> void deliver(Consumer<T> callback,T value) { synchronized(waiting){if(!closed)main.post(() -> { if(!closed) callback.accept(value); });} }
     private List<Entry> withPodcasts(List<Entry> original){
         List<Entry> all=new ArrayList<>(original);
-        try(InputStream in=context.getAssets().open("podcast-seed.json")){JSONArray list=new JSONArray(new String(readLimited(in,32000),StandardCharsets.UTF_8));for(int index=0;index<list.length();index++)all.add(Entry.parse(list.getJSONObject(index)));}catch(Exception ignored){}
+        all.removeIf(entry->entry.provider.equals("spotify"));all.addAll(podcastEntries(context));
         return all;
+    }
+    static List<Entry> podcastEntries(Context context){
+        List<Entry> entries=new ArrayList<>();
+        for(PodcastShow show:PodcastRepository.get(context).recommendations()){
+            if(entries.size()>=16)break;
+            Entry entry=new Entry();entry.id=show.directoryId>0&&show.directoryId<=Integer.MAX_VALUE?-(int)show.directoryId:-Math.max(1,show.showId.hashCode()&0x7FFFFFFF);
+            entry.title=show.title;entry.provider="spotify";entry.date="";entry.poster=show.image;entry.backdrop=show.image;entry.official="";entry.source=show.source;entry.summary=show.author;entry.collection="Podcast";
+            entries.add(entry);
+        }
+        return entries;
     }
     private JSONObject readCache(){
         try(InputStream in=feedFile.exists()?new FileInputStream(feedFile):context.getAssets().open("feed-seed.json")){return new JSONObject(new String(readLimited(in,2*1024*1024),StandardCharsets.UTF_8));}

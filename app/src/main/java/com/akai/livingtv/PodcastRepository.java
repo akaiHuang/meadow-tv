@@ -1,6 +1,7 @@
 package com.akai.livingtv;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.os.*;
 import android.util.AtomicFile;
 import android.util.Xml;
@@ -34,13 +35,14 @@ final class PodcastRepository {
     private final Map<String,Long> episodeFetched=new HashMap<>();
     private final List<String> seeds=new ArrayList<>();
     private final AtomicFile cache,showFile;
+    private final SharedPreferences preferences;
     private long fetched,defaultsFetched;
     private boolean loading;
     private String lastError="";
     private final List<Consumer<List<MediaItem>>> pending=new ArrayList<>();
     private PodcastRepository(Context c){this(c,PodcastRepository::read,Executors.newSingleThreadExecutor(),System::currentTimeMillis);}
     PodcastRepository(Context c,Transport transport,ExecutorService work,LongSupplier clock){
-        context=c.getApplicationContext();this.transport=transport;this.work=work;this.clock=clock;
+        context=c.getApplicationContext();this.transport=transport;this.work=work;this.clock=clock;preferences=context.getSharedPreferences("podcast_preferences",0);
         cache=new AtomicFile(new File(c.getFilesDir(),"podcast-library.json"));showFile=new AtomicFile(new File(c.getFilesDir(),"podcast-shows.json"));
         try(InputStream in=showFile.openRead()){
             JSONArray entries=new JSONObject(new String(FeedRepository.readLimited(in,1024000),StandardCharsets.UTF_8)).getJSONArray("shows");
@@ -48,7 +50,11 @@ final class PodcastRepository {
         }catch(Exception ignored){}
         try(InputStream in=c.getAssets().open("podcast-seed.json")){
             JSONArray entries=new JSONArray(new String(FeedRepository.readLimited(in,48000),StandardCharsets.UTF_8));
-            for(int n=0;n<entries.length();n++){PodcastShow show=descriptor(entries.getJSONObject(n),false);if(show!=null){seeds.add(show.showId);if(!shows.containsKey(show.showId))shows.put(show.showId,show);}}
+            for(int n=0;n<entries.length();n++){PodcastShow show=descriptor(entries.getJSONObject(n),false);if(show!=null){
+                seeds.add(show.showId);PodcastShow previous=shows.get(show.showId);
+                if(previous==null)shows.put(show.showId,show);
+                else if(previous.author.isEmpty()||previous.genres.isEmpty())shows.put(show.showId,new PodcastShow(previous.showId,previous.title,previous.author.isEmpty()?show.author:previous.author,previous.feed,previous.image,previous.source,previous.directoryId,previous.followed,previous.followedAt,previous.genres.isEmpty()?show.genres:previous.genres));
+            }}
         }catch(Exception ignored){}
         try(InputStream in=cache.openRead()){
             JSONObject saved=new JSONObject(new String(FeedRepository.readLimited(in,1024000),StandardCharsets.UTF_8));fetched=saved.optLong("at");defaultsFetched=saved.optLong("defaultsAt");
@@ -66,7 +72,53 @@ final class PodcastRepository {
     synchronized PodcastShow show(String id){return shows.get(id);}
     synchronized String lastError(){return lastError;}
     synchronized List<PodcastShow> followedShows(){List<PodcastShow> result=new ArrayList<>();for(PodcastShow show:shows.values())if(show.followed)result.add(show);result.sort(Comparator.comparingLong((PodcastShow s)->s.followedAt).reversed());return result;}
-    synchronized List<PodcastShow> recommendations(){List<PodcastShow> result=new ArrayList<>();for(String id:seeds){PodcastShow show=shows.get(id);if(show!=null)result.add(show);}return result;}
+    synchronized List<PodcastShow> recommendations(){
+        List<PodcastShow> result=new ArrayList<>();for(String id:seeds){PodcastShow show=shows.get(id);if(show!=null)result.add(show);}
+        if(!personalizationEnabled())return result;
+        for(PodcastShow show:shows.values())if(!seeds.contains(show.showId))result.add(show);
+        // The candidate pool is the public shows already explored on this TV. No
+        // account history or model call is needed to rank this small local pool.
+        Map<String,Integer> order=new HashMap<>();for(int i=0;i<result.size();i++)order.put(result.get(i).showId,i);
+        JSONObject plays=preferenceObject("plays");Map<String,Integer> scores=recommendationScores(plays);
+        result.sort(Comparator.comparingInt((PodcastShow s)->scores.getOrDefault(s.showId,0)).reversed().thenComparingInt(s->order.get(s.showId)));
+        if(result.size()>4){
+            // Keep an unfamiliar option in every short list rather than allowing
+            // follows and repeat playback to fill every visible recommendation.
+            for(int i=result.size()-1;i>=3;i--){PodcastShow show=result.get(i);if(!show.followed&&plays.optInt(show.showId,0)==0){result.remove(i);result.add(3,show);break;}}
+        }
+        return new ArrayList<>(result.subList(0,Math.min(12,result.size())));
+    }
+    synchronized boolean personalizationEnabled(){return preferences.getBoolean("personalized",true);}
+    synchronized boolean setPersonalizationEnabled(boolean value){return preferences.edit().putBoolean("personalized",value).commit();}
+    synchronized boolean clearPlaybackPreferences(){return preferences.edit().remove("plays").remove("recentEpisodes").commit();}
+    synchronized String recommendationSummary(){return personalizationEnabled()?"根據這台電視的收藏與播放，推薦已探索的節目。":"精選推薦 · 個人化已關閉";}
+    synchronized int successfulPlayCount(String showId){return preferenceObject("plays").optInt(showId,0);}
+    synchronized boolean recordSuccessfulPlayback(MediaItem item){
+        if(!personalizationEnabled()||item==null||!item.provider.equals("podcast")||item.id.isEmpty())return false;
+        PodcastShow show=shows.get(item.showId);if(show==null)for(PodcastShow candidate:shows.values())if(candidate.title.equals(item.show)){show=candidate;break;}
+        if(show==null)return false;
+        long now=clock.getAsLong();JSONObject seen=preferenceObject("recentEpisodes"),plays=preferenceObject("plays");long previous=seen.optLong(item.id,-1);
+        if(previous>=0&&now>=previous&&now-previous<TimeUnit.HOURS.toMillis(6))return false;
+        try{seen.put(item.id,now);plays.put(show.showId,Math.min(30,plays.optInt(show.showId,0)+1));trimOldest(seen,128);trimOldest(plays,200);return preferences.edit().putString("plays",plays.toString()).putString("recentEpisodes",seen.toString()).commit();}catch(Exception ignored){return false;}
+    }
+    private JSONObject preferenceObject(String key){try{return new JSONObject(preferences.getString(key,"{}"));}catch(Exception ignored){return new JSONObject();}}
+    private static void trimOldest(JSONObject values,int limit){while(values.length()>limit){String oldest=null;long at=Long.MAX_VALUE;Iterator<String> keys=values.keys();while(keys.hasNext()){String key=keys.next();if(values.optLong(key)<at){oldest=key;at=values.optLong(key);}}if(oldest==null)break;values.remove(oldest);}}
+    private static boolean specificGenre(String genre){return !genre.equalsIgnoreCase("Podcast")&&!genre.equalsIgnoreCase("Podcasts")&&!genre.equals("播客");}
+    private Map<String,Integer> recommendationScores(JSONObject plays){
+        Map<String,Integer> authors=new HashMap<>(),genres=new HashMap<>(),scores=new HashMap<>();
+        for(PodcastShow liked:shows.values()){
+            int count=plays.optInt(liked.showId,0),weight=(liked.followed?3:0)+Math.min(5,count);if(weight==0)continue;
+            if(!liked.author.isEmpty())authors.put(liked.author,authors.getOrDefault(liked.author,0)+weight);
+            for(String genre:liked.genres)if(specificGenre(genre))genres.put(genre,genres.getOrDefault(genre,0)+weight);
+        }
+        for(PodcastShow candidate:shows.values()){
+            int own=plays.optInt(candidate.showId,0),weight=(candidate.followed?3:0)+Math.min(5,own),score=(candidate.followed?100:0)+Math.min(20,own)*4;
+            if(!candidate.author.isEmpty())score+=6*Math.max(0,authors.getOrDefault(candidate.author,0)-weight);
+            for(String genre:candidate.genres)if(specificGenre(genre))score+=2*Math.max(0,genres.getOrDefault(genre,0)-weight);
+            scores.put(candidate.showId,score);
+        }
+        return scores;
+    }
     synchronized boolean follow(String id){return changeFollow(id,true);}
     synchronized boolean unfollow(String id){return changeFollow(id,false);}
     private boolean changeFollow(String id,boolean followed){
@@ -114,8 +166,13 @@ final class PodcastRepository {
     void defaults(Consumer<List<MediaItem>> done){
         synchronized(this){if(!library.isEmpty()&&defaultsFetched>0&&clock.getAsLong()>=defaultsFetched&&clock.getAsLong()-defaultsFetched<FeedRepository.TTL){done.accept(defaultItems());return;}pending.add(done);if(loading)return;loading=true;}
         work.execute(()->{
-            List<PodcastShow> selected=followedShows();if(selected.isEmpty())selected=recommendations();List<MediaItem> found=new ArrayList<>();
-            for(PodcastShow show:selected)try{found.addAll(fetchEpisodes(show,4));}catch(Exception ignored){}
+            List<PodcastShow> followed=followedShows(),selected=new ArrayList<>();
+            if(followed.isEmpty())selected=recommendations();
+            else if(personalizationEnabled()){for(PodcastShow show:recommendations())if(show.followed)selected.add(show);}
+            else selected=followed;
+            List<MediaItem> found=new ArrayList<>();
+            // Opening the queue does not refresh every followed or discovered feed.
+            for(int n=0;n<Math.min(4,selected.size());n++)try{found.addAll(fetchEpisodes(selected.get(n),4));}catch(Exception ignored){}
             List<Consumer<List<MediaItem>>> callbacks;
             synchronized(this){if(!found.isEmpty())defaultsFetched=clock.getAsLong();store(found,null);loading=false;callbacks=new ArrayList<>(pending);pending.clear();}
             ui.post(()->{List<MediaItem> list=defaultItems();for(Consumer<List<MediaItem>> callback:callbacks)callback.accept(list);});
@@ -159,7 +216,7 @@ final class PodcastRepository {
         String id=directoryId>0?"show:apple:"+directoryId:"show:rss:"+hash(feed);
         String image=https(value.optString(directory?"artworkUrl600":"poster",value.optString("artworkUrl100")));if(!safe(image,false))image="";
         String source=https(value.optString(directory?"collectionViewUrl":"source"));if(!safe(source,false))source="";
-        return new PodcastShow(id,title,trim(value.optString("artistName",value.optString("author")),160),feed,image,source,directoryId,false,0);
+        return new PodcastShow(id,title,trim(value.optString("artistName",value.optString("author")),160),feed,image,source,directoryId,false,0,PodcastShow.genres(value));
     }
     private static boolean validShow(PodcastShow show){
         if(show.title.isEmpty()||show.title.length()>240||show.showId.length()>100||(!show.feed.isEmpty()&&!safe(show.feed,false)))return false;

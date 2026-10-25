@@ -23,7 +23,7 @@ public class MediaQueueTest {
         context=RuntimeEnvironment.getApplication();
         for(Class<?> type:new Class<?>[]{MediaQueue.class,PodcastRepository.class}) {Field f=type.getDeclaredField("instance");f.setAccessible(true);f.set(null,null);}
         context.deleteFile("media-queue.json");context.deleteFile("podcast-library.json");
-        queue=MediaQueue.get(context);ShadowMediaPlayer.resetStaticState();
+        queue=MediaQueue.get(context);context.getSharedPreferences("podcast_preferences",0).edit().clear().commit();ShadowMediaPlayer.resetStaticState();
     }
     MediaItem episode(String id) {MediaItem i=new MediaItem();i.id="pod:"+id;i.title="Episode "+id;i.show="Publisher";i.audio="https://example.org/"+id+".mp3";return i;}
     @Test public void reorderingKeepsCurrentItemAndAddingDeduplicates() {
@@ -52,6 +52,15 @@ public class MediaQueueTest {
         assertEquals("playing",queue.state);Field f=MediaQueueService.class.getDeclaredField("player");f.setAccessible(true);MediaPlayer first=(MediaPlayer)f.get(service);assertTrue(first.isPlaying());
         shadowOf(first).invokeCompletionListener();shadowOf(Looper.getMainLooper()).idle();assertSame(b,queue.current());assertEquals("playing",queue.state);assertNotSame(first,f.get(service));
         service.onStartCommand(new Intent(context,MediaQueueService.class).setAction("PAUSE"),0,2);assertEquals("paused",queue.state);assertEquals(2,queue.items().size());controller.destroy();
+    }
+    @Test public void recommendationHistoryStartsOnlyAfterAudioStartsAndNotOnQueueOrFailure()throws Exception {
+        PodcastRepository repository=PodcastRepository.get(context);PodcastShow show=repository.recommendations().get(0);MediaItem item=episode("preference");item.showId=show.showId;item.show=show.title;queue.add(item);queue.select(0);assertEquals(0,repository.successfulPlayCount(show.showId));
+        ShadowMediaPlayer.addMediaInfo(DataSource.toDataSource(item.audio),new ShadowMediaPlayer.MediaInfo(60000,2000));shadowOf((AudioManager)context.getSystemService(Context.AUDIO_SERVICE)).setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_GRANTED);
+        ServiceController<MediaQueueService> controller=Robolectric.buildService(MediaQueueService.class).create();MediaQueueService service=controller.get();service.onStartCommand(new Intent(context,MediaQueueService.class).setAction("PLAY"),0,1);
+        assertEquals("preparing",queue.state);assertEquals(0,repository.successfulPlayCount(show.showId));shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(2));assertEquals("playing",queue.state);assertEquals(1,repository.successfulPlayCount(show.showId));
+        service.onStartCommand(new Intent(context,MediaQueueService.class).setAction("PAUSE"),0,2);service.onStartCommand(new Intent(context,MediaQueueService.class).setAction("TOGGLE"),0,3);assertEquals(1,repository.successfulPlayCount(show.showId));
+        service.onStartCommand(new Intent(context,MediaQueueService.class).setAction("PLAY"),0,4);shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(2));assertEquals(1,repository.successfulPlayCount(show.showId));controller.destroy();
+        MediaItem invalid=episode("invalid");invalid.showId=show.showId;invalid.show=show.title;invalid.audio="https://localhost/private.mp3";queue.add(invalid);queue.select(1);ServiceController<MediaQueueService> bad=Robolectric.buildService(MediaQueueService.class).create();bad.get().onStartCommand(new Intent(context,MediaQueueService.class).setAction("PLAY"),0,1);assertEquals("error",queue.state);assertEquals(1,repository.successfulPlayCount(show.showId));bad.destroy();
     }
     @Test public void progressDoesNotTouchPlayerUntilPreparationCompletes()throws Exception {
         MediaItem item=episode("slow");queue.add(item);queue.select(0);ShadowMediaPlayer.addMediaInfo(DataSource.toDataSource(item.audio),new ShadowMediaPlayer.MediaInfo(60000,2000));shadowOf((AudioManager)context.getSystemService(Context.AUDIO_SERVICE)).setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_GRANTED);

@@ -7,24 +7,27 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.Process;
 import java.util.ArrayList;
-import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 
-/** Local weather imagery. A dialog shares each decoded scene; no image or render polling. */
+/** Local city photographs, shared at display size. Weather is a static treatment over the city. */
 final class WeatherScenes implements AutoCloseable {
     enum Scene { UNKNOWN, SUNNY, CLOUDY, RAIN, NIGHT, FOG, STORM, SNOW }
+    private static final int MAX_CACHE_ENTRIES=5;
     private final Resources resources;
     private final Handler ui=new Handler(Looper.getMainLooper());
     private final ExecutorService decode=Executors.newSingleThreadExecutor(task->{
         Thread thread=new Thread(()->{Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND);task.run();},"meadow-weather-art");
         thread.setDaemon(true);return thread;
     });
-    private final EnumMap<Scene,Bitmap> images=new EnumMap<>(Scene.class);
-    private final EnumMap<Scene,List<Consumer<Bitmap>>> waiting=new EnumMap<>(Scene.class);
-    private boolean closed;
+    private final LinkedHashMap<String,Bitmap> images=new LinkedHashMap<>(8,.75f,true);
+    private final Map<String,List<Consumer<Bitmap>>> waiting=new HashMap<>();
+    private volatile boolean closed;
 
     WeatherScenes(Resources resources){this.resources=resources;}
 
@@ -40,39 +43,55 @@ final class WeatherScenes implements AutoCloseable {
         return Scene.UNKNOWN;
     }
 
-    private static int resource(Scene scene){
-        switch(scene){
-            case SUNNY:return R.drawable.weather_sunny;
-            case CLOUDY:return R.drawable.weather_scene;
-            case RAIN:return R.drawable.weather_rain;
-            case NIGHT:return R.drawable.weather_night;
-            case FOG:case SNOW:return R.drawable.weather_fog;
-            case STORM:return R.drawable.weather_storm;
+    static int cityIndex(String city){
+        for(int index=0;index<WeatherRepository.CITIES.length;index++)if(WeatherRepository.CITIES[index].equals(city))return index;
+        return -1;
+    }
+    static int resource(String city){
+        switch(cityIndex(city)){
+            case 0:return R.drawable.city_taipei;
+            case 1:return R.drawable.city_newtaipei;
+            case 2:return R.drawable.city_taoyuan;
+            case 3:return R.drawable.city_taichung;
+            case 4:return R.drawable.city_tainan;
+            case 5:return R.drawable.city_kaohsiung;
+            case 6:return R.drawable.city_hsinchu;
+            case 7:return R.drawable.city_yilan;
+            case 8:return R.drawable.city_hualien;
             default:return 0;
         }
     }
+    static float focalX(String city){return cityIndex(city)==1?.85f:cityIndex(city)==8?.35f:.5f;}
 
-    void load(Scene scene,Consumer<Bitmap> ready){
+    void load(String city,boolean large,Consumer<Bitmap> ready){
         if(closed)return;
-        if(scene==Scene.UNKNOWN){ready.accept(null);return;}
-        // Snow uses the same mist photograph with an explicit cold/snow treatment.
-        Scene image=scene==Scene.SNOW?Scene.FOG:scene;
-        Bitmap cached=images.get(image);
+        int resource=resource(city);
+        if(resource==0){ready.accept(null);return;}
+        String key=cityIndex(city)+(large?":week":":card");
+        Bitmap cached=images.get(key);
         if(cached!=null){ready.accept(cached);return;}
-        List<Consumer<Bitmap>> callbacks=waiting.get(image);
+        List<Consumer<Bitmap>> callbacks=waiting.get(key);
         if(callbacks!=null){callbacks.add(ready);return;}
-        callbacks=new ArrayList<>();callbacks.add(ready);waiting.put(image,callbacks);
-        int resource=resource(image);
+        callbacks=new ArrayList<>();callbacks.add(ready);waiting.put(key,callbacks);
         decode.execute(()->{
+            if(closed)return;
             BitmapFactory.Options size=new BitmapFactory.Options();size.inJustDecodeBounds=true;size.inScaled=false;
             BitmapFactory.decodeResource(resources,resource,size);
             BitmapFactory.Options options=new BitmapFactory.Options();options.inPreferredConfig=Bitmap.Config.RGB_565;options.inScaled=false;
-            int sample=1;while(size.outWidth/sample>1024||size.outHeight/sample>640)sample*=2;options.inSampleSize=sample;
+            int width=large?1024:512,height=large?640:320,sample=1;
+            while(size.outWidth/sample>width||size.outHeight/sample>height)sample*=2;options.inSampleSize=sample;
             Bitmap bitmap=BitmapFactory.decodeResource(resources,resource,options);
             ui.post(()->{
                 if(closed){if(bitmap!=null)bitmap.recycle();return;}
-                List<Consumer<Bitmap>> recipients=waiting.remove(image);
-                if(bitmap!=null)images.put(image,bitmap);
+                List<Consumer<Bitmap>> recipients=waiting.remove(key);
+                if(bitmap!=null){
+                    images.put(key,bitmap);
+                    while(images.size()>MAX_CACHE_ENTRIES){
+                        // A visible PhotoView may still hold an evicted bitmap. Removing
+                        // the cache reference is safe; recycling here would corrupt it.
+                        String oldest=images.keySet().iterator().next();images.remove(oldest);
+                    }
+                }
                 if(recipients!=null)for(Consumer<Bitmap> recipient:recipients)recipient.accept(bitmap);
             });
         });
@@ -80,6 +99,8 @@ final class WeatherScenes implements AutoCloseable {
 
     @Override public void close(){
         closed=true;decode.shutdownNow();waiting.clear();
+        // Callers clear every PhotoView first. Evicted images are reclaimed after
+        // their visible owners release them, rather than recycled under a Canvas.
         for(Bitmap bitmap:images.values())bitmap.recycle();images.clear();
     }
 }

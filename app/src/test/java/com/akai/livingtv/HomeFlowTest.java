@@ -54,11 +54,49 @@ public class HomeFlowTest {
     }
     private void collectText(View view,List<String> text){if(view instanceof TextView)text.add(((TextView)view).getText().toString());if(view instanceof ViewGroup){ViewGroup group=(ViewGroup)view;for(int i=0;i<group.getChildCount();i++)collectText(group.getChildAt(i),text);}}
     @Test public void podcastSelectionKeepsAnAmbientBackgroundInsteadOfEnlargingItsLogo()throws Exception{settle();((FrameLayout[])field("appTiles"))[4].requestFocusFromTouch();settle();settle();assertFalse(programs().isEmpty());assertTrue(((String)field("showingArtwork")).startsWith("ambient:"));}
+    @Test public void podcastHomeRecommendationsRefreshFromTheLocalLibraryAfterFollowingAShow()throws Exception{
+        settle();PodcastRepository podcasts=PodcastRepository.get(activity);String id="show:apple:1477164549";PodcastShow guaji=podcasts.show(id);assertNotNull("The requested Guaji show must be in the public seed",guaji);
+        boolean followed=guaji.followed,personalized=podcasts.personalizationEnabled();
+        try{
+            podcasts.setPersonalizationEnabled(true);((FrameLayout[])field("appTiles"))[4].requestFocusFromTouch();settle();assertTrue(podcasts.follow(id));
+            invoke("updatePrograms",new Class<?>[]{boolean.class},false);settle();
+            List<FeedRepository.Entry> visible=(List<FeedRepository.Entry>)field("visiblePrograms");List<PodcastShow> expected=podcasts.recommendations();assertEquals(expected.size(),visible.size());
+            for(int index=0;index<expected.size();index++)assertEquals("Home follows the current local ranking",expected.get(index).title,visible.get(index).title);
+            assertTrue(visible.stream().anyMatch(entry->entry.title.equals("呱吉")));
+        }finally{if(!followed)podcasts.unfollow(id);podcasts.setPersonalizationEnabled(personalized);}
+    }
     @Test public void landscapeRailScrollsBeyondFourAndTracksArtwork()throws Exception{
-        settle();List<FeedRepository.Entry> list=(List<FeedRepository.Entry>)field("entries");FeedRepository.Entry original=list.stream().filter(e->e.provider.equals("netflix")).findFirst().get();list.clear();for(int i=0;i<9;i++){FeedRepository.Entry e=FeedRepository.Entry.parse(original.json());e.id=100+i;e.wide=false;list.add(e);}
+        settle();List<FeedRepository.Entry> list=(List<FeedRepository.Entry>)field("entries");FeedRepository.Entry original=fixtureCard("netflix",601,320,180);list.clear();for(int i=0;i<9;i++){FeedRepository.Entry e=FeedRepository.Entry.parse(original.json());e.id=100+i;e.wide=false;list.add(e);}
         assertTrue("TV D-pad focus could not enter Netflix",((FrameLayout[])field("appTiles"))[1].requestFocusFromTouch());settle();assertEquals(9,programs().size());FrameLayout ninth=programs().get(8);assertTrue(ninth.requestFocusFromTouch());settle();
-        assertTrue(ninth.hasFocus());assertTrue(ninth.isSelected());assertEquals(380,ninth.getLayoutParams().width);assertEquals(214,ninth.getLayoutParams().height);assertEquals(ImageView.ScaleType.CENTER_CROP,((ImageView)ninth.getChildAt(0)).getScaleType());assertTrue(((HorizontalScrollView)field("programScroll")).getScrollX()>0);
+        assertTrue(ninth.hasFocus());assertTrue(ninth.isSelected());assertEquals(380,ninth.getLayoutParams().width);assertEquals(214,ninth.getLayoutParams().height);assertEquals(ImageView.ScaleType.FIT_CENTER,((ImageView)ninth.getChildAt(0)).getScaleType());assertTrue(((HorizontalScrollView)field("programScroll")).getScrollX()>0);
         assertEquals("近期與精選節目",((TextView)field("heroMeta")).getText().toString());capture("native-rail-simulation.png");
+    }
+    private FeedRepository.Entry fixtureCard(String provider,int id,int width,int height)throws Exception{
+        List<FeedRepository.Entry> entries=(List<FeedRepository.Entry>)field("entries");FeedRepository.Entry base=entries.stream().filter(e->e.provider.equals(provider)).findFirst().get();FeedRepository.Entry entry=FeedRepository.Entry.parse(base.json());
+        entry.id=id;entry.title="Artwork ratio "+id;entry.poster="https://cards.nflximg.net/ratio-"+id+".png";entry.wide=true;
+        Bitmap bitmap=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);bitmap.eraseColor(Color.CYAN);Canvas canvas=new Canvas(bitmap);Paint paint=new Paint();paint.setColor(Color.RED);canvas.drawRect(0,0,width*.1f,height,paint);paint.setColor(Color.BLUE);canvas.drawRect(width*.9f,0,width,height,paint);
+        byte[] digest=java.security.MessageDigest.getInstance("SHA-256").digest(entry.poster.getBytes(java.nio.charset.StandardCharsets.UTF_8));StringBuilder key=new StringBuilder();for(byte b:digest)key.append(String.format(java.util.Locale.ROOT,"%02x",b));File cache=new File(activity.getCacheDir(),"art");cache.mkdirs();try(FileOutputStream out=new FileOutputStream(new File(cache,key.toString()))){bitmap.compress(Bitmap.CompressFormat.PNG,100,out);}bitmap.recycle();return entry;
+    }
+    @Test public void recommendationCardsUseDecodedPortraitLandscapeAndSquareRatiosWithoutCropping()throws Exception{
+        settle();FeedRepository.Entry portrait=fixtureCard("netflix",611,120,180),landscape=fixtureCard("netflix",612,320,180),square=fixtureCard("netflix",613,160,160);
+        List<FeedRepository.Entry> entries=(List<FeedRepository.Entry>)field("entries");entries.clear();entries.add(portrait);entries.add(landscape);entries.add(square);
+        ((FrameLayout[])field("appTiles"))[1].requestFocusFromTouch();settle();settle();int[][] expected={{178,267},{380,214},{267,267}};
+        for(int i=0;i<3;i++){
+            FrameLayout card=programs().get(i);ImageView image=(ImageView)card.getChildAt(0);assertNotNull(image.getDrawable());assertEquals(expected[i][0],card.getWidth());assertEquals(expected[i][1],card.getHeight());assertEquals(ImageView.ScaleType.FIT_CENTER,image.getScaleType());
+            Bitmap painted=Bitmap.createBitmap(card.getWidth(),card.getHeight(),Bitmap.Config.ARGB_8888);image.draw(new Canvas(painted));int left=painted.getPixel(4,card.getHeight()/2),right=painted.getPixel(card.getWidth()-5,card.getHeight()/2);
+            assertTrue("The left strip of the source cover must remain visible",Color.red(left)>220&&Color.blue(left)<30);assertTrue("The right strip of the source cover must remain visible",Color.blue(right)>220&&Color.red(right)<30);painted.recycle();
+        }
+    }
+    @Test public void delayedPosterFromPreviousProviderCannotResizeOrReplaceTheReusedCard()throws Exception{
+        settle();FeedRepository.Entry old=fixtureCard("netflix",621,120,180),current=fixtureCard("hbo",622,320,180);List<FeedRepository.Entry> entries=(List<FeedRepository.Entry>)field("entries");entries.clear();entries.add(old);entries.add(current);
+        ((FeedRepository)field("repository")).close();FeedRepository images=new FeedRepository(activity);Field repository=MainActivity.class.getDeclaredField("repository");repository.setAccessible(true);repository.set(activity,images);
+        Field workerField=FeedRepository.class.getDeclaredField("images");workerField.setAccessible(true);java.util.concurrent.ThreadPoolExecutor workers=(java.util.concurrent.ThreadPoolExecutor)workerField.get(images);
+        java.util.concurrent.CountDownLatch entered=new java.util.concurrent.CountDownLatch(2),release=new java.util.concurrent.CountDownLatch(1);
+        Runnable hold=()->{entered.countDown();try{release.await();}catch(InterruptedException interrupted){Thread.currentThread().interrupt();}};
+        try{
+            workers.execute(hold);workers.execute(hold);assertTrue(entered.await(5,java.util.concurrent.TimeUnit.SECONDS));FrameLayout[] apps=(FrameLayout[])field("appTiles");apps[1].requestFocusFromTouch();settle();FrameLayout reused=programs().get(0);apps[2].requestFocusFromTouch();settle();assertSame(reused,programs().get(0));release.countDown();settle();settle();
+            ImageView image=(ImageView)reused.getChildAt(0);assertEquals(current.title,reused.getContentDescription());assertNotNull(image.getDrawable());assertEquals(380,reused.getWidth());assertEquals(214,reused.getHeight());Bitmap bitmap=((android.graphics.drawable.BitmapDrawable)image.getDrawable()).getBitmap();assertEquals(320,bitmap.getWidth());assertEquals(180,bitmap.getHeight());
+        }finally{release.countDown();}
     }
     @Test public void reusedCardsFollowTheNewProviderAndKeepTheCorrectClickTarget()throws Exception{
         settle();FrameLayout[] apps=(FrameLayout[])field("appTiles");apps[1].requestFocusFromTouch();settle();

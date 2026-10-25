@@ -42,6 +42,7 @@ public class PodcastLibraryUiTest {
     @Before public void setup()throws Exception{
         fixture=new OfflineDesignTest();fixture.setup();fixture.seedQueue();
         Context context=fixture.activity;long now=System.currentTimeMillis();
+        context.getSharedPreferences("podcast_preferences",0).edit().clear().commit();
         PodcastShow show=new PodcastShow(SHOW_ID,"這是任意新增的中文節目，並不在預設的三個節目之中","離線測試出版社","https://example.org/arbitrary-show.xml","","",918273645L,true,now);
         JSONArray cached=new JSONArray();
         for(MediaItem old:PodcastRepository.get(context).items()){
@@ -112,6 +113,20 @@ public class PodcastLibraryUiTest {
         assertEquals(current,fixture.queue.current().id);assertEquals(index,fixture.queue.index);assertEquals(state,fixture.queue.state);
         assertTrue(add.performClick());shadowOf(Looper.getMainLooper()).idle();assertEquals("Adding the same episode twice is idempotent",before.size()+1,fixture.queue.items().size());
         assertEquals(current,fixture.queue.current().id);assertEquals(state,fixture.queue.state);assertEquals(0,fetches.get());
+    }
+
+    @Test public void recommendationTabAndPreferencesKeepRemoteFocusAndNeverStartPlayback()throws Exception {
+        List<String> before=queueIds();String current=fixture.queue.current().id;int index=fixture.queue.index;String state=fixture.queue.state;
+        PodcastLibraryDialog panel=new PodcastLibraryDialog(fixture.activity);panel.open();AlertDialog dialog=track(panel);settle(dialog);
+        View followed=(View)fixture.field(panel,"followedTab"),recommend=(View)fixture.field(panel,"recommendedTab"),results=(View)fixture.field(panel,"resultsTab"),preferences=(View)fixture.field(panel,"preferencesButton"),close=(View)fixture.field(panel,"close");
+        assertTrue(followed.requestFocusFromTouch());assertSame(recommend,followed.focusSearch(View.FOCUS_RIGHT));assertTrue(recommend.performClick());settle(dialog);assertTrue(recommend.isSelected());assertFalse(results.isSelected());
+        assertTrue("The requested Guaji show is a real recommendation",visibleText(dialog.getWindow().getDecorView()).contains("呱吉"));assertTrue(visibleText(dialog.getWindow().getDecorView()).contains("收藏與播放"));
+        assertTrue(results.requestFocusFromTouch());assertTrue("Moving focus does not change the current list",recommend.isSelected());assertSame(preferences,results.focusSearch(View.FOCUS_RIGHT));assertTrue(preferences.requestFocusFromTouch());assertSame(close,preferences.focusSearch(View.FOCUS_RIGHT));
+        MediaItem played=new MediaItem();played.id="pod:local-history";played.showId=SHOW_ID;played.show=repository.show(SHOW_ID).title;assertTrue(repository.recordSuccessfulPlayback(played));
+        preferences.performClick();AlertDialog settings=(AlertDialog)org.robolectric.shadows.ShadowDialog.getLatestDialog();dialogs.add(settings);settle(settings);View toggle=settings.getWindow().getDecorView().findViewWithTag("controlMenu:podcast-personalization");assertNotNull(toggle);toggle.performClick();assertFalse(repository.personalizationEnabled());
+        settings.getWindow().getDecorView().findViewWithTag("controlMenuClose").performClick();settle(dialog);assertTrue(preferences.hasFocus());assertTrue(recommend.isSelected());
+        preferences.performClick();settings=(AlertDialog)org.robolectric.shadows.ShadowDialog.getLatestDialog();dialogs.add(settings);settle(settings);settings.getWindow().getDecorView().findViewWithTag("controlMenu:podcast-personalization").performClick();assertTrue(repository.personalizationEnabled());settings.getWindow().getDecorView().findViewWithTag("controlMenu:podcast-clear-preferences").performClick();assertEquals(0,repository.successfulPlayCount(SHOW_ID));assertTrue(repository.show(SHOW_ID).followed);settings.getWindow().getDecorView().findViewWithTag("controlMenuClose").performClick();settle(dialog);
+        assertPlayback(before,current,index,state);assertEquals(0,fetches.get());
     }
 
     private AlertDialog track(Object panel)throws Exception{AlertDialog dialog=(AlertDialog)fixture.field(panel,"dialog");dialogs.add(dialog);return dialog;}

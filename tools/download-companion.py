@@ -19,7 +19,7 @@ import urllib.request
 from companion import ROOT, private_directory
 
 REPOSITORY = "akaiHuang/meadow-tv"
-TAG = "v0.8.16-preview.1"
+TAG = "v0.8.18-preview.1"
 ASSET = "MeadowTV-companion-macos-arm64.tar.gz"
 FILES = {"meadow-tv-bridge", "catalog-seed.json", "catalog-refresh.py"}
 MAX_ARCHIVE = 128 * 1024 * 1024

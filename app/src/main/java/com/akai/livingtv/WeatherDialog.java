@@ -18,7 +18,7 @@ import java.time.ZoneId;
 import java.util.*;
 import java.util.function.Consumer;
 
-/** Weekly weather and an independent city rail with cached, condition-specific imagery. */
+/** Weekly weather and an independent city rail with local landmarks and static weather treatments. */
 final class WeatherDialog {
     private static final int WHITE=0xFFF0F5F2, SOFT=0xFFC1D0CA, DIM=0xFFA6BCAF;
     private static final int PANEL_X=288,PANEL_Y=162,PANEL_WIDTH=1344,PANEL_HEIGHT=756;
@@ -76,7 +76,7 @@ final class WeatherDialog {
         GradientDrawable glass=new GradientDrawable(GradientDrawable.Orientation.TL_BR,new int[]{0xB34C6860,0xCA1B2B2B,0xE010201E});glass.setCornerRadius(PANEL_RADIUS);weeklyPanel.setBackground(glass);
         GradientDrawable rim=Glass.surface(Color.TRANSPARENT,0x80D9F7E7,PANEL_RADIUS);rim.setStroke(3,0x80D9F7E7);weeklyPanel.setForeground(rim);
         put(stage,weeklyPanel,PANEL_X,PANEL_Y,PANEL_WIDTH,PANEL_HEIGHT);
-        weeklyPhoto=photo(.5f);weeklyPhoto.setTag("weatherWeeklyPhoto");put(weeklyPanel,weeklyPhoto,0,0,PANEL_WIDTH,340);
+        weeklyPhoto=photo(WeatherRepository.CITIES[selected],true);weeklyPhoto.setTag("weatherWeeklyPhoto");put(weeklyPanel,weeklyPhoto,0,0,PANEL_WIDTH,340);
         View readingShade=new View(activity);readingShade.setBackground(new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,new int[]{0xAC11231E,0x4011231E,0x0011231E}));put(weeklyPanel,readingShade,0,0,PANEL_WIDTH,340);
         View shade=new View(activity);shade.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0x4011231E,0x1811231E,0xF01C302C}));put(weeklyPanel,shade,0,0,PANEL_WIDTH,340);
         otherCities=pill("其他城市","cities",this::showPicker);otherCities.setTag("weatherOtherCities");put(weeklyPanel,otherCities,161,57,192,50);
@@ -94,7 +94,7 @@ final class WeatherDialog {
     }
     private void buildPicker(){
         // No shared plate, mask, border or rounded parent around the independent cards.
-        pickerPanel=new FrameLayout(activity);pickerPanel.setTag("weatherCityPicker");pickerPanel.setClipChildren(false);pickerPanel.setClipToPadding(false);put(stage,pickerPanel,0,0,1920,1080);
+        pickerPanel=new FrameLayout(activity);pickerPanel.setTag("weatherCityPicker");pickerPanel.setClipChildren(false);pickerPanel.setClipToPadding(false);pickerPanel.setVisibility(View.GONE);put(stage,pickerPanel,0,0,1920,1080);
         backWeather=pill("返回預報","back",this::showWeekly);backWeather.setTag("weatherBack");put(pickerPanel,backWeather,230,219,210,50);
         pickerClose=closeButton(()->dialog.dismiss());pickerClose.setTag("weatherPickerClose");put(pickerPanel,pickerClose,1638,219,52,52);
         backWeather.setNextFocusLeftId(backWeather.getId());backWeather.setNextFocusRightId(pickerClose.getId());backWeather.setNextFocusUpId(backWeather.getId());
@@ -102,6 +102,7 @@ final class WeatherDialog {
         TextView heading=text("其他城市",32,WHITE);heading.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));put(pickerPanel,heading,230,318,700,50);
         TextView guide=text("← → 選擇城市，按確認查看預報",20,0xFFA9C1B4);guide.setGravity(Gravity.RIGHT|Gravity.CENTER_VERTICAL);put(pickerPanel,guide,1010,325,680,38);
         cityRail=new HorizontalScrollView(activity);cityRail.setId(View.generateViewId());cityRail.setFocusable(false);cityRail.setHorizontalScrollBarEnabled(false);cityRail.setHorizontalFadingEdgeEnabled(false);cityRail.setFadingEdgeLength(0);cityRail.setOverScrollMode(View.OVER_SCROLL_NEVER);cityRail.setClipToPadding(false);cityRail.setClipChildren(true);cityRail.setSmoothScrollingEnabled(!reduceMotion);put(pickerPanel,cityRail,0,384,1920,460);
+        cityRail.setOnScrollChangeListener((view,x,y,oldX,oldY)->refreshPhotoVisibility());
         cityRow=new LinearLayout(activity);cityRow.setOrientation(LinearLayout.HORIZONTAL);cityRow.setGravity(Gravity.CENTER_VERTICAL);cityRow.setPadding(288,0,288,0);cityRow.setClipChildren(false);cityRow.setClipToPadding(false);cityRail.addView(cityRow,new HorizontalScrollView.LayoutParams(-2,-1));
         for(int index=0;index<cities.length;index++)buildCity(index);
         for(int index=0;index<cities.length;index++){
@@ -110,11 +111,11 @@ final class WeatherDialog {
         cityRail.getViewTreeObserver().addOnGlobalLayoutListener(()->{if(alive&&pickerOpen&&needsCityLayout&&cityRow.getWidth()>0){needsCityLayout=false;centerCity(false);}});
         railCount=text("1 / "+cities.length,18,0xFFA4BCAD);put(pickerPanel,railCount,230,866,500,36);
         TextView backNote=text("按返回鍵保留目前城市",18,0xFFA4BCAD);backNote.setGravity(Gravity.RIGHT|Gravity.CENTER_VERTICAL);put(pickerPanel,backNote,1010,866,680,36);
-        TextView photoNote=text("背景依各城市天況切換，為氛圍示意，非即時影像。",16,0xFF829C8C);photoNote.setGravity(Gravity.CENTER);put(pickerPanel,photoNote,200,1000,1520,36);
+        TextView photoNote=text("城市特色與天況為生成氛圍示意，非即時影像。",16,0xFF829C8C);photoNote.setGravity(Gravity.CENTER);put(pickerPanel,photoNote,200,1000,1520,36);
     }
     private void buildCity(int index){
         final int choice=index;RoundedFrame card=new RoundedFrame(26);card.setId(View.generateViewId());card.setTag("weatherCity"+index);card.setFocusable(true);card.setClickable(true);card.setDefaultFocusHighlightEnabled(false);card.setBackground(Glass.surface(0xFF243A31,0x44E8FFF8,26));
-        cityPhotos[index]=photo((15+(index*19)%76)/100f);cityPhotos[index].setTag("weatherCityPhoto"+index);put(card,cityPhotos[index],0,0,340,440);
+        cityPhotos[index]=photo(WeatherRepository.CITIES[index],false);cityPhotos[index].setTag("weatherCityPhoto"+index);put(card,cityPhotos[index],0,0,340,440);
         View shade=new View(activity);shade.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0x060C2119,0x100C2119,0xF50C2119}));put(card,shade,0,0,340,440);
         FrameLayout current=new FrameLayout(activity);current.setBackground(Glass.surface(0xD0348055,0x5589E9B1,20));put(card,current,148,28,158,40);currentMarks[index]=current;
         ImageView check=new ImageView(activity);check.setImageDrawable(new Mark("check",0xFFF3FFF7));put(current,check,10,8,24,24);checks[index]=check;
@@ -136,9 +137,9 @@ final class WeatherDialog {
         FrameLayout incoming=picker?pickerPanel:weeklyPanel,outgoing=picker?weeklyPanel:pickerPanel;
         incoming.setVisibility(View.VISIBLE);paintCities();backWeather.setNextFocusDownId(cities[focusedCity].getId());pickerClose.setNextFocusDownId(cities[focusedCity].getId());
         Runnable focus=()->{if(!alive||pickerOpen!=picker||generation!=animationGeneration)return;if(picker){cities[focusedCity].requestFocus();centerCity(false);}else otherCities.requestFocus();};
-        if(reduceMotion||!animate){outgoing.setVisibility(View.GONE);focus.run();return;}
+        if(reduceMotion||!animate){outgoing.setVisibility(View.GONE);refreshPhotoVisibility();focus.run();return;}
         incoming.setAlpha(0);incoming.setRotationY(7);incoming.setCameraDistance(22000);outgoing.setCameraDistance(22000);
-        outgoing.animate().alpha(0).rotationY(-7).setDuration(200).setInterpolator(new DecelerateInterpolator()).withEndAction(()->{if(alive&&generation==animationGeneration)outgoing.setVisibility(View.GONE);}).start();
+        outgoing.animate().alpha(0).rotationY(-7).setDuration(200).setInterpolator(new DecelerateInterpolator()).withEndAction(()->{if(alive&&generation==animationGeneration){outgoing.setVisibility(View.GONE);refreshPhotoVisibility();}}).start();
         incoming.animate().alpha(1).rotationY(0).setDuration(220).setInterpolator(new DecelerateInterpolator()).withEndAction(focus).start();
     }
     private void confirmCity(int index){
@@ -174,11 +175,12 @@ final class WeatherDialog {
         if(!pickerOpen||cityRail==null)return;int left=288+focusedCity*372;int max=Math.max(0,cityRow.getWidth()-cityRail.getWidth());int target=Math.max(0,Math.min(max,left-(1920-340)/2));
         if(cityRail.getScrollX()!=target){if(smooth)cityRail.smoothScrollTo(target,0);else cityRail.scrollTo(target,0);}
         backWeather.setNextFocusDownId(cities[focusedCity].getId());pickerClose.setNextFocusDownId(cities[focusedCity].getId());railCount.setText((focusedCity+1)+" / "+cities.length);
+        refreshPhotoVisibility();
     }
     private void back(){if(!alive)return;if(pickerOpen)showWeekly();else dialog.dismiss();}
     private void paintReading(){
         city.setText(WeatherRepository.CITIES[selected]);boolean matches=reading!=null&&WeatherRepository.CITIES[selected].equals(reading.city);int code=matches?reading.code:-1;
-        weeklyPhoto.update(matches?reading:null);
+        weeklyPhoto.update(WeatherRepository.CITIES[selected],matches?reading:null);
         temperature.setText(matches?currentDegrees(reading):"—");condition.setText(matches?(code>=0?WeatherRepository.description(code):reading.days.isEmpty()?"天氣暫不可用":"天況未提供"):"正在讀取天氣…");glyph.update(code,!matches||reading.day);
         daysRow.removeAllViews();LocalDate today=LocalDate.now(ZoneId.of("Asia/Taipei"));
         for(int index=0;index<7;index++){
@@ -200,7 +202,19 @@ final class WeatherDialog {
         for(int index=0;index<cities.length;index++){
             if(cities[index]==null)continue;boolean current=index==selected;cities[index].setSelected(current);currentMarks[index].setVisibility(current?View.VISIBLE:View.INVISIBLE);checks[index].setVisibility(current?View.VISIBLE:View.INVISIBLE);
             cities[index].setContentDescription(WeatherRepository.CITIES[index]+(current?"，目前城市":"")+"，按確認查看一週天氣");
-            WeatherRepository.Reading cached=cityReadings.get(index);cityPhotos[index].update(cached);citySummaries[index].setText(cached!=null&&cached.code>=0?currentDegrees(cached)+" · "+WeatherRepository.description(cached.code):cached==null?"正在讀取天氣…":"天氣暫不可用");
+            WeatherRepository.Reading cached=cityReadings.get(index);cityPhotos[index].update(WeatherRepository.CITIES[index],cached);citySummaries[index].setText(cached!=null&&cached.code>=0?currentDegrees(cached)+" · "+WeatherRepository.description(cached.code):cached==null?"正在讀取天氣…":"天氣暫不可用");
+        }
+        refreshPhotoVisibility();
+    }
+    private void refreshPhotoVisibility(){
+        if(!alive||weeklyPhoto==null||cityRail==null)return;
+        weeklyPhoto.active(weeklyPanel.getVisibility()==View.VISIBLE);
+        boolean visible=pickerPanel.getVisibility()==View.VISIBLE;
+        int left=cityRail.getScrollX(),right=left+(cityRail.getWidth()>0?cityRail.getWidth():1920);
+        for(int index=0;index<cityPhotos.length;index++){
+            if(cityPhotos[index]==null)continue;
+            int x=cities[index].getWidth()>0?cities[index].getLeft():288+index*372;
+            cityPhotos[index].active(visible&&x<right&&x+340>left);
         }
     }
     private void finish(){
@@ -210,7 +224,7 @@ final class WeatherDialog {
     private String currentDegrees(WeatherRepository.Reading value){try{double number=Double.parseDouble(value.text.split("°",2)[0].trim());return Double.isFinite(number)?Math.round(number)+"°":"—";}catch(Exception ignored){return "—";}}
     private static String degrees(Double value){return value==null||!Double.isFinite(value)?"—":Math.round(value)+"°";}
     private String stamp(long time){SimpleDateFormat format=new SimpleDateFormat("MM/dd HH:mm",Locale.TAIWAN);format.setTimeZone(TimeZone.getTimeZone("Asia/Taipei"));return format.format(new Date(time));}
-    private PhotoView photo(float position){PhotoView view=new PhotoView(position);photos.add(view);return view;}
+    private PhotoView photo(String city,boolean large){PhotoView view=new PhotoView(city,large);photos.add(view);return view;}
     private TextView pill(String caption,String mark,Runnable action){
         TextView button=text("",22,WHITE);button.setId(View.generateViewId());button.setGravity(Gravity.CENTER);button.setFocusable(true);button.setClickable(true);button.setDefaultFocusHighlightEnabled(false);button.setBackground(pillSurface(25));
         Mark icon=new Mark(mark,WHITE);icon.setBounds(0,0,24,24);SpannableString group=new SpannableString("\uFFFC"+caption);group.setSpan(new InlineMark(icon,9),0,1,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);button.setText(group);button.setContentDescription(caption);button.setOnClickListener(v->action.run());return button;
@@ -227,23 +241,86 @@ final class WeatherDialog {
         @Override protected void dispatchDraw(Canvas canvas){int save=canvas.save();canvas.clipPath(clip);super.dispatchDraw(canvas);canvas.restoreToCount(save);}
     }
     private final class PhotoView extends View {
-        private Bitmap bitmap;private final float position;private final Matrix matrix=new Matrix();private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG),wash=new Paint();
-        private WeatherScenes.Scene scene;private boolean night;private int generation;
-        PhotoView(float position){super(activity);this.position=position;setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);setBackgroundColor(0xFF233B3B);}
-        void update(WeatherRepository.Reading value){
-            WeatherScenes.Scene next=WeatherScenes.scene(value);boolean dark=value!=null&&!value.day;
-            if(scene==next&&night==dark)return;scene=next;night=dark;int request=++generation;
-            bitmap=null;invalidate();WeatherScenes owner=scenes;
-            if(owner!=null)owner.load(next,image->{if(!alive||owner!=scenes||request!=generation)return;bitmap=image;positionBitmap();invalidate();});
+        private Bitmap bitmap;
+        private final boolean large;
+        private String cityName;
+        private final Matrix matrix=new Matrix();
+        private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG),sky=new Paint(Paint.ANTI_ALIAS_FLAG),detail=new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Path lightning=new Path();
+        private final float[] rainLines=new float[48*4],snowDots=new float[40*3],stars=new float[18*2];
+        private WeatherScenes.Scene scene=WeatherScenes.Scene.UNKNOWN;
+        private boolean night,active,loading;
+        private int generation;
+
+        PhotoView(String city,boolean large){
+            super(activity);this.cityName=city;this.large=large;
+            setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);setBackgroundColor(0xFF233B3B);
         }
-        private void positionBitmap(){if(bitmap==null)return;float scale=Math.max(getWidth()/(float)bitmap.getWidth(),getHeight()/(float)bitmap.getHeight());matrix.setScale(scale,scale);matrix.postTranslate((getWidth()-bitmap.getWidth()*scale)*position,(getHeight()-bitmap.getHeight()*scale)*.5f);}
-        @Override protected void onSizeChanged(int width,int height,int oldWidth,int oldHeight){positionBitmap();}
+        void update(String city,WeatherRepository.Reading value){
+            WeatherScenes.Scene next=WeatherScenes.scene(value);boolean dark=value!=null&&!value.day;
+            boolean cityChanged=!Objects.equals(cityName,city);
+            if(!cityChanged&&scene==next&&night==dark)return;
+            cityName=city;scene=next;night=dark;
+            if(cityChanged){++generation;bitmap=null;loading=false;}
+            buildTreatment();if(active)ensureImage();invalidate();
+        }
+        void active(boolean value){
+            if(active==value)return;active=value;
+            if(value)ensureImage();else{++generation;bitmap=null;loading=false;invalidate();}
+        }
+        private void ensureImage(){
+            if(!active||loading||bitmap!=null||scenes==null)return;
+            int request=++generation;WeatherScenes owner=scenes;String requestedCity=cityName;loading=true;
+            owner.load(requestedCity,large,image->{
+                if(!alive||!active||owner!=scenes||request!=generation||!Objects.equals(requestedCity,cityName))return;
+                loading=false;bitmap=image;positionBitmap();invalidate();
+            });
+        }
+        private void positionBitmap(){
+            if(bitmap==null)return;float scale=Math.max(getWidth()/(float)bitmap.getWidth(),getHeight()/(float)bitmap.getHeight());
+            matrix.setScale(scale,scale);matrix.postTranslate((getWidth()-bitmap.getWidth()*scale)*WeatherScenes.focalX(cityName),(getHeight()-bitmap.getHeight()*scale)*.5f);
+        }
+        @Override protected void onSizeChanged(int width,int height,int oldWidth,int oldHeight){positionBitmap();buildTreatment();}
+        private void buildTreatment(){
+            int width=getWidth(),height=getHeight();if(width<=0||height<=0)return;
+            float saturation=scene==WeatherScenes.Scene.SUNNY?1.06f:scene==WeatherScenes.Scene.UNKNOWN?1f:.68f;
+            float brightness=night?.42f:scene==WeatherScenes.Scene.STORM?.58f:scene==WeatherScenes.Scene.RAIN?.78f:scene==WeatherScenes.Scene.CLOUDY?.87f:1f;
+            ColorMatrix tone=new ColorMatrix();tone.setSaturation(saturation);
+            tone.postConcat(new ColorMatrix(new float[]{brightness,0,0,0,0,0,brightness,0,0,0,0,0,night?brightness*1.28f:brightness,0,0,0,0,0,1,0}));
+            paint.setColorFilter(new ColorMatrixColorFilter(tone));
+            int top=0,bottom=0;
+            if(night){top=0x56344769;bottom=0x38111B34;}
+            else if(scene==WeatherScenes.Scene.CLOUDY){top=0x663E5363;bottom=0x10172735;}
+            else if(scene==WeatherScenes.Scene.RAIN){top=0x6632485B;bottom=0x1A172B39;}
+            else if(scene==WeatherScenes.Scene.STORM){top=0x85323C51;bottom=0x2E15212F;}
+            else if(scene==WeatherScenes.Scene.FOG){top=0xA0D3E1E3;bottom=0x35D1DBD9;}
+            else if(scene==WeatherScenes.Scene.SNOW){top=0x85D8E8EF;bottom=0x28CCDDE5;}
+            if(scene==WeatherScenes.Scene.SUNNY&&!night)
+                sky.setShader(new RadialGradient(width*.83f,height*.08f,Math.max(width,height)*.85f,new int[]{0x45FFE4AD,0x00FFE4AD},null,Shader.TileMode.CLAMP));
+            else sky.setShader(new LinearGradient(0,0,0,height,top,bottom,Shader.TileMode.CLAMP));
+            int seed=Math.max(0,WeatherScenes.cityIndex(cityName));
+            for(int i=0;i<48;i++){
+                float x=((i*73+seed*29+17)%997)/997f*width,y=((i*131+seed*37+43)%991)/991f*height;
+                rainLines[i*4]=x;rainLines[i*4+1]=y;rainLines[i*4+2]=x-width*.018f;rainLines[i*4+3]=y+Math.max(16,height*.045f);
+            }
+            for(int i=0;i<40;i++){snowDots[i*3]=((i*79+seed*19+17)%991)/991f*width;snowDots[i*3+1]=((i*127+seed*23+29)%997)/997f*height;snowDots[i*3+2]=1.5f+(i%3);}
+            for(int i=0;i<18;i++){stars[i*2]=((i*107+seed*17+23)%991)/991f*width;stars[i*2+1]=((i*79+seed*23+13)%997)/997f*height*.4f;}
+            lightning.reset();lightning.moveTo(width*.81f,height*.04f);lightning.lineTo(width*.77f,height*.16f);lightning.lineTo(width*.81f,height*.15f);lightning.lineTo(width*.76f,height*.29f);
+        }
         @Override protected void onDraw(Canvas canvas){
             if(bitmap!=null)canvas.drawBitmap(bitmap,matrix,paint);
-            if(night&&scene!=WeatherScenes.Scene.NIGHT){wash.setColor(0x790B1730);canvas.drawRect(0,0,getWidth(),getHeight(),wash);}
-            if(scene==WeatherScenes.Scene.SNOW){wash.setColor(0x55D8E8EF);canvas.drawRect(0,0,getWidth(),getHeight(),wash);wash.setColor(0xAADDECF2);for(int i=0;i<30;i++){float x=((i*73+17)%337)/337f*getWidth(),y=((i*47+29)%421)/421f*getHeight();canvas.drawCircle(x,y,1.6f+(i%3),wash);}}
+            canvas.drawRect(0,0,getWidth(),getHeight(),sky);
+            detail.setShader(null);detail.setStyle(Paint.Style.STROKE);detail.setStrokeCap(Paint.Cap.ROUND);
+            if(scene==WeatherScenes.Scene.RAIN||scene==WeatherScenes.Scene.STORM){
+                detail.setColor(night?0x647F9EBA:0x729CC9D9);detail.setStrokeWidth(1.6f);canvas.drawLines(rainLines,detail);
+                if(scene==WeatherScenes.Scene.STORM){detail.setColor(0xAED7E9F8);detail.setStrokeWidth(2.3f);canvas.drawPath(lightning,detail);}
+            }else if(scene==WeatherScenes.Scene.SNOW){
+                detail.setStyle(Paint.Style.FILL);detail.setColor(0xC7EBF5F9);for(int i=0;i<40;i++)canvas.drawCircle(snowDots[i*3],snowDots[i*3+1],snowDots[i*3+2],detail);
+            }else if(scene==WeatherScenes.Scene.NIGHT){
+                detail.setStyle(Paint.Style.FILL);detail.setColor(0x8ADCE8FA);for(int i=0;i<18;i++)canvas.drawCircle(stars[i*2],stars[i*2+1],1.2f,detail);
+            }
         }
-        void clear(){++generation;bitmap=null;invalidate();}
+        void clear(){active=false;++generation;bitmap=null;loading=false;invalidate();}
     }
     private static final class InlineMark extends ImageSpan {
         private final int gap;InlineMark(Drawable icon,int gap){super(icon);this.gap=gap;}

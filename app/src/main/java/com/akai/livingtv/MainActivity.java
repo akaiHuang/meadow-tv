@@ -219,7 +219,7 @@ public final class MainActivity extends Activity {
         FeedRepository.Entry entry;int index;
         ProgramCard(){
             makeFocusable(tile);tile.setBackground(surface(0x60212E27,0x66526A5C,21));tile.setClipToOutline(true);
-            picture.setScaleType(ImageView.ScaleType.CENTER_CROP);tile.addView(picture,new FrameLayout.LayoutParams(-1,-1));
+            picture.setScaleType(ImageView.ScaleType.FIT_CENTER);tile.addView(picture,new FrameLayout.LayoutParams(-1,-1));
             StateListDrawable edge=new StateListDrawable();GradientDrawable line=surface(Color.TRANSPARENT,WHITE,21);line.setStroke(5,WHITE);
             edge.addState(new int[]{android.R.attr.state_focused},line);edge.addState(new int[]{android.R.attr.state_selected},line);edge.addState(new int[]{},new ColorDrawable(Color.TRANSPARENT));tile.setForeground(edge);
             tile.setOnClickListener(v->{if(entry!=null)showProgram(entry);});
@@ -231,20 +231,39 @@ public final class MainActivity extends Activity {
             tile.animate().cancel();tile.setScaleX(1);tile.setScaleY(1);tile.setSelected(false);
             if(entry==null||!cardArtwork(entry).equals(cardArtwork(next))||picture.getDrawable()==null){picture.setImageDrawable(null);requestedProgramImages.remove(picture);}
             entry=next;index=at;tile.setContentDescription(next.title);tile.setFocusable(!controlsOpen);tile.setVisibility(View.VISIBLE);
-            int width=next.provider.equals("spotify")?267:380,height=next.provider.equals("spotify")?267:214;
-            LinearLayout.LayoutParams lp=(LinearLayout.LayoutParams)tile.getLayoutParams();if(lp.width!=width||lp.height!=height){lp.width=width;lp.height=height;tile.setLayoutParams(lp);}
+            Drawable artwork=picture.getDrawable();
+            if(artwork instanceof BitmapDrawable){Bitmap bitmap=((BitmapDrawable)artwork).getBitmap();fitArtwork(bitmap.getWidth(),bitmap.getHeight());}
+            else if(next.provider.equals("spotify"))fitArtwork(1,1);
+            else fitArtwork(next.wide?16:2,next.wide?9:3);
+        }
+        void showArtwork(Bitmap bitmap){
+            picture.setImageBitmap(bitmap);if(bitmap==null)return;
+            if(fitArtwork(bitmap.getWidth(),bitmap.getHeight()))programRow.post(()->{
+                // A newly decoded poster can resize cards before the current focus.
+                // Keep that focused card in the viewport without recentering every image.
+                if(!started||controlsOpen)return;View focused=getCurrentFocus();if(focused==null||!programTiles.contains(focused))return;
+                int left=programScroll.getScrollX(),right=left+programScroll.getWidth();
+                if(focused.getLeft()<left+14)scrollRail(programScroll,Math.max(0,focused.getLeft()-14));
+                else if(focused.getRight()>right-14)scrollRail(programScroll,Math.max(0,focused.getRight()+14-programScroll.getWidth()));
+            });
+        }
+        private boolean fitArtwork(int width,int height){
+            if(width<=0||height<=0)return false;float scale=Math.min(380f/width,267f/height);
+            int displayWidth=Math.max(1,Math.round(width*scale)),displayHeight=Math.max(1,Math.round(height*scale));
+            LinearLayout.LayoutParams lp=(LinearLayout.LayoutParams)tile.getLayoutParams();if(lp.width==displayWidth&&lp.height==displayHeight)return false;
+            lp.width=displayWidth;lp.height=displayHeight;tile.setLayoutParams(lp);return true;
         }
         void hide(){tile.animate().cancel();tile.setVisibility(View.GONE);tile.setFocusable(false);picture.setImageDrawable(null);requestedProgramImages.remove(picture);programRow.removeView(tile);entry=null;}
     }
-    private static String cardArtwork(FeedRepository.Entry entry){return entry.provider.equals("spotify")||entry.wide||entry.backdrop.isEmpty()?entry.poster:entry.backdrop;}
+    private static String cardArtwork(FeedRepository.Entry entry){return ContentPolicy.artworkLink(entry.poster)?entry.poster:entry.backdrop;}
     private void loadVisibleProgramImages(){
         if(!started||repository==null||programScroll.getWidth()==0||pendingArt!=null)return;
         int left=programScroll.getScrollX()-380,right=programScroll.getScrollX()+programScroll.getWidth()+380;
         for(int i=0;i<programTiles.size();i++){
-            View tile=programTiles.get(i);ImageView image=programImages.get(i);
+            View tile=programTiles.get(i);ImageView image=programImages.get(i);ProgramCard card=programPool.get(i);
             if(image.getDrawable()!=null||tile.getWidth()==0||tile.getRight()<left||tile.getLeft()>right||!requestedProgramImages.add(image))continue;
-            long generation=programGeneration;
-            repository.thumbnail(cardArtwork(visiblePrograms.get(i)),b->{if(started&&generation==programGeneration&&requestedProgramImages.contains(image)&&image.isAttachedToWindow()){image.setImageBitmap(b);if(b==null)requestedProgramImages.remove(image);}});
+            long generation=programGeneration;String url=cardArtwork(visiblePrograms.get(i));
+            repository.thumbnail(url,b->{if(started&&generation==programGeneration&&requestedProgramImages.contains(image)&&image.isAttachedToWindow()&&card.entry!=null&&url.equals(cardArtwork(card.entry))){card.showArtwork(b);if(b==null)requestedProgramImages.remove(image);}});
         }
     }
     private void selectProgram(int index){
@@ -323,7 +342,8 @@ public final class MainActivity extends Activity {
     private void updatePrograms(boolean initial){
         boolean previousFocusLock=changingFocus;changingFocus=true;int oldCover=programTiles.indexOf(getCurrentFocus());int oldId=oldCover>=0&&oldCover<visiblePrograms.size()?visiblePrograms.get(oldCover).id:-1;
         String provider=selectedProvider();List<FeedRepository.Entry> next=new ArrayList<>();
-        if(!provider.isEmpty())for(FeedRepository.Entry e:entries)if(e.provider.equals(provider))next.add(e);
+        if(provider.equals("spotify"))next.addAll(FeedRepository.podcastEntries(this));
+        else if(!provider.isEmpty())for(FeedRepository.Entry e:entries)if(e.provider.equals(provider))next.add(e);
         if(apps[appIndex].equals(renderedApp)&&provider.equals(renderedProvider)&&samePrograms(next,visiblePrograms)){
             changingFocus=previousFocusLock;loadVisibleProgramImages();
             if(!visiblePrograms.isEmpty())selectArt(visiblePrograms.get(Math.min(artIndex,visiblePrograms.size()-1)));else if(appIndex==0&&showingArtwork.isEmpty())showAmbient();
@@ -336,10 +356,10 @@ public final class MainActivity extends Activity {
             if(card.picture.getDrawable()!=null)requestedProgramImages.add(card.picture);
         }
         for(int i=visiblePrograms.size();i<programPool.size();i++)programPool.get(i).hide();
-        if(oldCover<0)programScroll.scrollTo(0,0);sectionTitle.setText(visiblePrograms.isEmpty()?"":provider.equals("spotify")?"台灣 Podcast":names[appIndex]);wireFocus();
+        if(oldCover<0)programScroll.scrollTo(0,0);sectionTitle.setText(visiblePrograms.isEmpty()?"":provider.equals("spotify")?"為你推薦":names[appIndex]);wireFocus();
         if(!visiblePrograms.isEmpty())selectProgram(0);
         else {++artworkGeneration;if(backgroundFade!=null)backgroundFade.cancel();incomingBackdrop.setAlpha(0);incomingBackdrop.setImageDrawable(null);if(pendingArt!=null)handler.removeCallbacks(pendingArt);heroTitle.setText("今晚，想看什麼？");heroMeta.setText("");if(appIndex==0)showAmbient();else {backdrop.animate().alpha(0).setDuration(280).start();showingArtwork="";}}
-        sourceLabel.setText(visiblePrograms.isEmpty()?(appIndex==0?"Google Ambient · 精選攝影":""):provider.equals("spotify")?"Podcast 封面與資料：發布者／Apple Podcasts · 點選瀏覽與播放單集":"資料：平台台灣公開目錄 · 實際上架與播放以 App 為準");
+        sourceLabel.setText(visiblePrograms.isEmpty()?(appIndex==0?"Google Ambient · 精選攝影":""):provider.equals("spotify")?PodcastRepository.get(this).recommendationSummary()+" · Apple Podcasts／發布者":"資料：平台台灣公開目錄 · 實際上架與播放以 App 為準");
         if(oldCover>=0&&!controlsOpen&&!visiblePrograms.isEmpty()){
             int restore=Math.min(oldCover,visiblePrograms.size()-1);for(int i=0;i<visiblePrograms.size();i++)if(visiblePrograms.get(i).id==oldId){restore=i;break;}
             programTiles.get(restore).requestFocus();selectProgram(restore);
@@ -354,7 +374,7 @@ public final class MainActivity extends Activity {
     }
     private String providerName(String provider){if(provider.equals("spotify"))return "Spotify";return provider.equals("netflix")?"Netflix":provider.equals("hbo")?"HBO Max":"Apple TV";}
     private void selectArt(FeedRepository.Entry entry){
-        heroTitle.setText(SEASON_SUFFIX.matcher(entry.title).replaceFirst(""));heroMeta.setText(entry.provider.equals("spotify")?"台灣 Podcast 推薦":"近期與精選節目");
+        heroTitle.setText(SEASON_SUFFIX.matcher(entry.title).replaceFirst(""));heroMeta.setText(entry.provider.equals("spotify")?"為你推薦 · Podcast":"近期與精選節目");
         if(pendingArt!=null){handler.removeCallbacks(pendingArt);pendingArt=null;}
         if(entry.provider.equals("spotify")){if(!showingArtwork.startsWith("ambient:"))showAmbient();return;}
         final long generation=++artworkGeneration;
@@ -590,7 +610,7 @@ public final class MainActivity extends Activity {
     private void tryResumePreview(){if(started&&!controlsOpen&&openDialogs==0&&prefs.getBoolean("hdmiPreview",true)&&hdmiPreview!=null)hdmiPreview.start();}
     private void syncPreview(){handler.removeCallbacks(resumePreview);if(started&&!controlsOpen&&openDialogs==0&&prefs.getBoolean("hdmiPreview",true))handler.postDelayed(resumePreview,650);}
     private void dialogClosed(){openDialogs=Math.max(0,openDialogs-1);shownDialogs.removeIf(d->!d.isShowing());
-        dialogRegions.keySet().removeIf(d->!d.isShowing());dialogCornerFractions.keySet().removeIf(d->!d.isShowing());transparentDialogs.removeIf(d->!d.isShowing());if(openDialogs==0)clearModalScene();syncPreview();}
+        dialogRegions.keySet().removeIf(d->!d.isShowing());dialogCornerFractions.keySet().removeIf(d->!d.isShowing());transparentDialogs.removeIf(d->!d.isShowing());if(openDialogs==0){clearModalScene();if(started&&selectedProvider().equals("spotify"))updatePrograms(false);}syncPreview();}
     private void clearModalScene(){if(modalGlass!=null){modalGlass.cancel();modalGlass=null;}modalScene=null;dialogRegions.clear();if(modalBackdrop!=null){modalBackdrop.setVisibility(View.INVISIBLE);modalBackdrop.setImageDrawable(null);}}
     org.json.JSONArray assistantCatalog(){org.json.JSONArray list=new org.json.JSONArray();Map<String,Integer> counts=new HashMap<>();for(FeedRepository.Entry e:entries)try{if(list.length()>=30)break;if(counts.getOrDefault(e.provider,0)>=10)continue;String summary=e.summary==null?"":e.summary;if(summary.length()>400)summary=summary.substring(0,400);list.put(new org.json.JSONObject().put("title",e.title).put("provider",e.provider).put("date",e.date).put("source",e.source).put("summary",summary).put("region",e.region).put("locale",e.locale).put("availability",e.availability).put("collection",e.collection).put("verifiedAt",String.valueOf(e.verifiedAt)));counts.put(e.provider,counts.getOrDefault(e.provider,0)+1);}catch(Exception ignored){}return list;}
     void sizeContentPanel(Window window){if(window!=null){android.util.DisplayMetrics metrics=getResources().getDisplayMetrics();window.setLayout(Math.round(metrics.widthPixels*.70f),Math.round(metrics.heightPixels*.70f));}}

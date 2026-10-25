@@ -27,7 +27,7 @@ final class PodcastLibraryDialog {
     private final Runnable afterClose;
     private AlertDialog dialog;
     private EditText query;
-    private TextView searchButton,voiceSearch,followedTab,resultsTab,followButton,message,showTitle,showAuthor;
+    private TextView searchButton,voiceSearch,followedTab,recommendedTab,resultsTab,preferencesButton,followButton,message,showTitle,showAuthor;
     private ImageButton close;
     private LinearLayout showRows,episodeRows;
     private ScrollView showScroll,episodeScroll;
@@ -35,7 +35,7 @@ final class PodcastLibraryDialog {
     private PodcastShow selectedShow;
     private List<PodcastShow> results=Collections.emptyList();
     private final List<View> showTargets=new ArrayList<>(),episodeTargets=new ArrayList<>(),episodeAdditions=new ArrayList<>();
-    private boolean alive,favorites=true;
+    private boolean alive,favorites=true,recommending;
     private int searchGeneration,episodeGeneration,showImageGeneration;
 
     PodcastLibraryDialog(MainActivity activity){this(activity,"",null);}
@@ -60,7 +60,11 @@ final class PodcastLibraryDialog {
         Glyph searchIcon=new Glyph("search",0xFFBCCDC2);searchIcon.setBounds(0,0,27,27);query.setCompoundDrawablesRelative(searchIcon,null,null,null);query.setCompoundDrawablePadding(10);put(stage,query,228,198,1072,62);
         searchButton=button("搜尋",this::search);decorate(searchButton,"search");searchButton.setTag("podcastLibrarySearch");put(stage,searchButton,1318,198,182,62);
         query.setOnEditorActionListener((v,action,event)->{if(action==EditorInfo.IME_ACTION_SEARCH){search();return true;}return false;});
-        followedTab=button("已收藏",()->switchList(true));resultsTab=button("搜尋結果",()->switchList(false));followedTab.setTag("podcastFollowedTab");resultsTab.setTag("podcastResultsTab");followedTab.setOnFocusChangeListener((v,on)->paintTabs());resultsTab.setOnFocusChangeListener((v,on)->paintTabs());put(stage,followedTab,60,281,180,58);put(stage,resultsTab,251,281,205,58);
+        followedTab=button("已收藏",()->switchList(true));recommendedTab=button("為你推薦",this::showRecommendations);resultsTab=button("搜尋結果",()->switchList(false));
+        followedTab.setTag("podcastFollowedTab");recommendedTab.setTag("podcastRecommendedTab");resultsTab.setTag("podcastResultsTab");
+        for(TextView tab:new TextView[]{followedTab,recommendedTab,resultsTab})tab.setOnFocusChangeListener((v,on)->paintTabs());
+        put(stage,followedTab,60,281,180,58);put(stage,recommendedTab,251,281,205,58);put(stage,resultsTab,467,281,205,58);
+        preferencesButton=button("偏好",this::showPreferences);preferencesButton.setTag("podcastPreferences");preferencesButton.setTextSize(TypedValue.COMPLEX_UNIT_PX,22);put(stage,preferencesButton,687,281,125,58);
         showRows=column();showScroll=scroll(showRows);showScroll.setTag("podcastShows");put(stage,showScroll,49,352,763,449);
         View divider=new View(activity);divider.setBackgroundColor(0x335E7666);put(stage,divider,820,303,1,498);
         TextPairRow detail=new TextPairRow(120);detail.setTag("podcastShowDetail");detailCover=cover();detailCover.setTag("art");put(detail,detailCover,0,0,100,100);
@@ -81,34 +85,41 @@ final class PodcastLibraryDialog {
         voiceSearch.setNextFocusLeftId(voiceSearch.getId());voiceSearch.setNextFocusRightId(query.getId());voiceSearch.setNextFocusUpId(close.getId());voiceSearch.setNextFocusDownId(query.getId());
         query.setNextFocusLeftId(voiceSearch.getId());query.setNextFocusRightId(searchButton.getId());query.setNextFocusUpId(close.getId());
         searchButton.setNextFocusLeftId(query.getId());searchButton.setNextFocusRightId(searchButton.getId());searchButton.setNextFocusUpId(close.getId());
-        followedTab.setNextFocusLeftId(followedTab.getId());followedTab.setNextFocusRightId(resultsTab.getId());resultsTab.setNextFocusLeftId(followedTab.getId());resultsTab.setNextFocusRightId(close.getId());
-        followedTab.setNextFocusUpId(query.getId());resultsTab.setNextFocusUpId(query.getId());
-        close.setNextFocusLeftId(resultsTab.getId());close.setNextFocusUpId(close.getId());close.setNextFocusRightId(close.getId());close.setNextFocusDownId(searchButton.getId());
+        followedTab.setNextFocusLeftId(followedTab.getId());followedTab.setNextFocusRightId(recommendedTab.getId());recommendedTab.setNextFocusLeftId(followedTab.getId());recommendedTab.setNextFocusRightId(resultsTab.getId());resultsTab.setNextFocusLeftId(recommendedTab.getId());resultsTab.setNextFocusRightId(preferencesButton.getId());preferencesButton.setNextFocusLeftId(resultsTab.getId());preferencesButton.setNextFocusRightId(close.getId());
+        for(View tab:new View[]{followedTab,recommendedTab,resultsTab,preferencesButton})tab.setNextFocusUpId(query.getId());
+        close.setNextFocusLeftId(preferencesButton.getId());close.setNextFocusUpId(close.getId());close.setNextFocusRightId(close.getId());close.setNextFocusDownId(searchButton.getId());
         followButton.setNextFocusUpId(searchButton.getId());followButton.setNextFocusRightId(followButton.getId());
         wireLists();
     }
 
     private void paintTabs(){
         if(followedTab==null)return;
-        followedTab.setSelected(favorites);resultsTab.setSelected(!favorites);
-        for(TextView tab:new TextView[]{followedTab,resultsTab}){
-            String label=tab==followedTab?"已收藏":"搜尋結果";boolean current=tab.isSelected(),focused=tab.hasFocus();
+        followedTab.setSelected(favorites);recommendedTab.setSelected(recommending);resultsTab.setSelected(!favorites&&!recommending);
+        for(TextView tab:new TextView[]{followedTab,recommendedTab,resultsTab}){
+            String label=tab==followedTab?"已收藏":tab==recommendedTab?"為你推薦":"搜尋結果";boolean current=tab.isSelected(),focused=tab.hasFocus();
             tab.setText(current?"● "+label:label);tab.setTextColor(current||focused?INK:WHITE);tab.setContentDescription(label+(current?"，目前顯示":"，按確認切換"));
             GradientDrawable surface=new GradientDrawable();surface.setCornerRadius(30);surface.setColor(current?0xFFF4F7F6:focused?0x80FFFFFF:Color.TRANSPARENT);tab.setBackground(surface);
         }
     }
 
     private void switchList(boolean followed){
-        favorites=followed;++searchGeneration;paintTabs();renderShows(followed?podcasts.followedShows():results);notice("");
+        favorites=followed;recommending=false;++searchGeneration;paintTabs();renderShows(followed?podcasts.followedShows():results);notice("");
+    }
+    private void showRecommendations(){favorites=false;recommending=true;++searchGeneration;paintTabs();renderShows(podcasts.recommendations());notice(podcasts.recommendationSummary());}
+    private void showPreferences(){
+        GlassMenuDialog menu=new GlassMenuDialog(activity,"推薦偏好","只使用這台電視的收藏、播放與已探索節目。");
+        menu.addToggle("podcast-personalization","個人化推薦","關閉後使用精選推薦，並停止記錄新的播放偏好。",R.drawable.ic_person,podcasts::personalizationEnabled,value->{if(!podcasts.setPersonalizationEnabled(value))notice("偏好暫時無法儲存，請稍後再試。");});
+        menu.addOption("podcast-clear-preferences","清除播放偏好","保留已收藏節目與播放清單。",R.drawable.ic_settings,false,()->{notice(podcasts.clearPlaybackPreferences()?"已清除播放偏好，收藏與清單已保留。":"偏好暫時無法清除，請稍後再試。");});
+        menu.onDismiss(()->{if(!alive)return;if(recommending){renderShows(podcasts.recommendations());notice(podcasts.recommendationSummary());}preferencesButton.requestFocusFromTouch();});menu.open();
     }
 
     private void search(){
         String term=query.getText().toString().trim();
         if(term.isEmpty()){notice("請先輸入節目名稱或想聽的主題。");query.requestFocus();return;}
-        hideKeyboard();favorites=false;paintTabs();int generation=++searchGeneration;
+        hideKeyboard();favorites=false;recommending=false;paintTabs();int generation=++searchGeneration;
         results=Collections.emptyList();renderShows(results,"正在搜尋節目…");notice("正在搜尋公開 Podcast 目錄…");
         podcasts.searchShowsResult(term,result->{
-            if(!alive||generation!=searchGeneration||favorites)return;
+            if(!alive||generation!=searchGeneration||favorites||recommending)return;
             results=result.items;renderShows(results,result.ok()?"沒有找到這個節目，試試其他名稱或主題。":"搜尋暫時無法完成，請稍後再試。");
             notice(result.ok()?(results.isEmpty()?"沒有搜尋結果。":"找到 "+results.size()+" 個節目，按確認查看單集。"):errorText(result.errorCode,result.stale));
         });
@@ -158,7 +169,7 @@ final class PodcastLibraryDialog {
         boolean saved=wasFollowed?podcasts.unfollow(id):podcasts.follow(id);
         if(!saved){notice(errorText(podcasts.lastError(),false));return;}
         PodcastShow current=podcasts.show(id);if(current!=null)selectedShow=current;
-        paintFollow();renderShows(favorites?podcasts.followedShows():results);notice(wasFollowed?"已取消收藏，原本的播放清單不受影響。":"已收藏："+selectedShow.title);followButton.requestFocus();
+        paintFollow();renderShows(favorites?podcasts.followedShows():recommending?podcasts.recommendations():results);notice(wasFollowed?"已取消收藏，原本的播放清單不受影響。":"已收藏："+selectedShow.title);followButton.requestFocus();
     }
 
     private void renderEpisodes(List<MediaItem> episodes,String emptyText){
@@ -183,11 +194,11 @@ final class PodcastLibraryDialog {
 
     private void wireLists(){
         if(query==null||followedTab==null||followButton==null)return;
-        View first=showTargets.isEmpty()?(favorites?followedTab:resultsTab):showTargets.get(0);
-        query.setNextFocusDownId(first.getId());searchButton.setNextFocusDownId(first.getId());followedTab.setNextFocusDownId(first.getId());resultsTab.setNextFocusDownId(first.getId());
+        View activeTab=favorites?followedTab:recommending?recommendedTab:resultsTab,first=showTargets.isEmpty()?activeTab:showTargets.get(0);
+        query.setNextFocusDownId(first.getId());searchButton.setNextFocusDownId(first.getId());for(View tab:new View[]{followedTab,recommendedTab,resultsTab,preferencesButton})tab.setNextFocusDownId(first.getId());
         View detailTarget=followButton.isEnabled()?followButton:searchButton;
         for(int i=0;i<showTargets.size();i++){
-            View row=showTargets.get(i);row.setNextFocusUpId(i==0?(favorites?followedTab:resultsTab).getId():showTargets.get(i-1).getId());row.setNextFocusDownId(showTargets.get(Math.min(showTargets.size()-1,i+1)).getId());row.setNextFocusLeftId(row.getId());row.setNextFocusRightId(detailTarget.getId());
+            View row=showTargets.get(i);row.setNextFocusUpId(i==0?activeTab.getId():showTargets.get(i-1).getId());row.setNextFocusDownId(showTargets.get(Math.min(showTargets.size()-1,i+1)).getId());row.setNextFocusLeftId(row.getId());row.setNextFocusRightId(detailTarget.getId());
         }
         View last=showTargets.isEmpty()?query:showTargets.get(showTargets.size()-1);followButton.setNextFocusLeftId(last.getId());followButton.setNextFocusDownId(episodeTargets.isEmpty()?followButton.getId():episodeTargets.get(0).getId());
         for(int i=0;i<episodeTargets.size();i++){

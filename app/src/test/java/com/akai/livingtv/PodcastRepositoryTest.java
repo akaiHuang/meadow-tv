@@ -24,7 +24,7 @@ public class PodcastRepositoryTest {
     private static final String SHOW="show:apple:4242",FEED="https://feeds.example.org/custom.xml";
     private Context context;private ManualExecutor work;
     @Before public void setup()throws Exception {
-        context=RuntimeEnvironment.getApplication();work=new ManualExecutor();reset(PodcastRepository.class,null);reset(MediaQueue.class,null);
+        context=RuntimeEnvironment.getApplication();work=new ManualExecutor();reset(PodcastRepository.class,null);reset(MediaQueue.class,null);context.getSharedPreferences("podcast_preferences",0).edit().clear().commit();
         for(String name:new String[]{"podcast-shows.json","podcast-library.json","media-queue.json"})for(String suffix:new String[]{"",".bak",".new"})remove(new File(context.getFilesDir(),name+suffix));
     }
     @After public void cleanup()throws Exception {reset(PodcastRepository.class,null);reset(MediaQueue.class,null);}
@@ -41,7 +41,7 @@ public class PodcastRepositoryTest {
 
     @Test public void directoryDiscoveryIsNotSeedRestrictedAndDoesNotDownloadEveryFeed()throws Exception {
         List<String> requests=new ArrayList<>();PodcastRepository repository=repository((url,max,prefix)->{requests.add(url);assertTrue(url.startsWith("https://itunes.apple.com/search?"));return bytes(directory());});
-        assertEquals(3,repository.recommendations().size());assertTrue(repository.followedShows().isEmpty());PodcastShow show=discover(repository);
+        assertEquals(4,repository.recommendations().size());assertTrue(repository.followedShows().isEmpty());PodcastShow show=discover(repository);
         assertEquals(SHOW,show.showId);assertEquals(show.id,show.showId);assertFalse(show.followed);assertEquals(1,requests.size());assertTrue(requests.get(0).contains("limit=20"));assertFalse(show.metadata().has("feed"));assertFalse(show.metadata().has("directoryId"));
     }
     @Test public void followedShowAndDiscoveredIdSurviveRestartWithoutNetwork()throws Exception {
@@ -101,6 +101,39 @@ public class PodcastRepositoryTest {
         QueueController.execute(context,new JSONObject().put("operation","add").put("itemId",itemId),receipt::set);assertTrue(receipt.get().getBoolean("ok"));
         QueueController.execute(context,new JSONObject().put("operation","unfollow_show").put("showId",SHOW),receipt::set);assertTrue(receipt.get().getBoolean("ok"));assertEquals(itemId,MediaQueue.get(context).items().get(0).id);assertEquals("stopped",MediaQueue.get(context).state);
         QueueController.execute(context,new JSONObject().put("operation","follow_show").put("showId","show:apple:unknown"),receipt::set);assertFalse(receipt.get().getBoolean("ok"));assertEquals("not_found",receipt.get().getString("errorCode"));assertFalse(receipt.get().getBoolean("persisted"));
+    }
+    @Test public void recommendationsUseOfficialGenresFollowsAndSuccessfulPlaybackLocally()throws Exception {
+        JSONArray entries=new JSONArray();
+        for(int i=1;i<=3;i++)entries.put(new JSONObject().put("collectionId",5000+i).put("collectionName","Fixture show "+i).put("artistName","Publisher "+i).put("feedUrl","https://feeds.example.org/"+i+".xml").put("genres",new JSONArray().put(i==3?"History":"Music").put("Podcast")));
+        PodcastRepository repository=repository((url,max,prefix)->bytes(new JSONObject().put("results",entries).toString()));
+        AtomicReference<PodcastRepository.Result<PodcastShow>> found=new AtomicReference<>();repository.searchShowsResult("more shows",found::set);work.runNext();settle();assertEquals(3,found.get().items.size());
+        assertTrue(repository.recommendations().stream().anyMatch(show->show.showId.equals("show:apple:1477164549")));
+        assertEquals(7,repository.recommendations().size());assertTrue(repository.follow("show:apple:5001"));
+        List<PodcastShow> ranked=repository.recommendations();assertEquals("show:apple:5001",ranked.get(0).showId);assertEquals("show:apple:5002",ranked.get(1).showId);
+        assertEquals(Arrays.asList("Music","Podcast"),repository.show("show:apple:5002").genres);
+        assertTrue(repository.unfollow("show:apple:5001"));assertNotEquals("show:apple:5001",repository.recommendations().get(0).showId);
+        MediaItem item=new MediaItem();item.id="pod:history-episode";item.showId="show:apple:5003";item.show="Fixture show 3";
+        assertTrue(repository.recordSuccessfulPlayback(item));assertFalse("Repeated preparation/retry is deduplicated",repository.recordSuccessfulPlayback(item));assertEquals(1,repository.successfulPlayCount(item.showId));assertEquals(item.showId,repository.recommendations().get(0).showId);
+        PodcastRepository restarted=repository((url,max,prefix)->{throw new AssertionError("Ranking must stay local");});assertEquals(item.showId,restarted.recommendations().get(0).showId);assertEquals(1,restarted.successfulPlayCount(item.showId));
+        assertTrue(restarted.setPersonalizationEnabled(false));assertEquals(4,restarted.recommendations().size());item.id="pod:another-history-episode";assertFalse(restarted.recordSuccessfulPlayback(item));assertEquals(1,restarted.successfulPlayCount(item.showId));
+        assertTrue(restarted.setPersonalizationEnabled(true));assertTrue(restarted.follow("show:apple:5001"));MediaQueue queue=MediaQueue.get(context);queue.add(item);int before=queue.items().size();
+        assertTrue(restarted.clearPlaybackPreferences());assertEquals(0,restarted.successfulPlayCount(item.showId));assertTrue(restarted.show("show:apple:5001").followed);assertEquals(before,queue.items().size());assertEquals("stopped",queue.state);
+    }
+    @Test public void genericPodcastGenreDoesNotCreateAPreferenceOrRegisterUnknownShows()throws Exception {
+        PodcastRepository repository=repository(normal());discover(repository);MediaItem unknown=new MediaItem();unknown.id="pod:unknown";unknown.showId="show:apple:missing";assertFalse(repository.recordSuccessfulPlayback(unknown));
+        assertEquals(0,repository.successfulPlayCount(unknown.showId));assertFalse(repository.recommendationSummary().isEmpty());
+        PodcastShow original=repository.show(SHOW);PodcastShow followed=original.followed(true,NOW);assertEquals(original.genres,PodcastShow.parse(followed.json()).genres);
+    }
+    @Test public void openingDefaultsRefreshesAtMostFourPreferredShows()throws Exception {
+        JSONArray entries=new JSONArray();for(int i=0;i<8;i++)entries.put(new JSONObject().put("collectionId",6000+i).put("collectionName","Followed "+i).put("feedUrl","https://feeds.example.org/followed-"+i+".xml"));List<String> requests=new ArrayList<>();
+        PodcastRepository repository=repository((url,max,prefix)->{requests.add(url);return url.contains("/search?")?bytes(new JSONObject().put("results",entries).toString()):bytes(rss());});AtomicReference<PodcastRepository.Result<PodcastShow>> result=new AtomicReference<>();repository.searchShowsResult("many",result::set);work.runNext();settle();for(PodcastShow show:result.get().items)assertTrue(repository.follow(show.showId));
+        requests.clear();AtomicReference<List<MediaItem>> episodes=new AtomicReference<>();repository.defaults(episodes::set);work.runNext();settle();assertEquals(4,requests.size());assertEquals(8,episodes.get().size());assertEquals(8,repository.followedShows().size());
+    }
+    @Test public void olderSeedMetadataGainsGenresWithoutLosingTheUsersFollow()throws Exception {
+        PodcastShow old=new PodcastShow("show:apple:1510554676","台灣通勤第一品牌","","https://anchor.fm/s/1ea77470/podcast/rss","","",1510554676L,true,NOW);
+        write("podcast-shows.json",new JSONObject().put("shows",new JSONArray().put(old.json())).toString());
+        PodcastRepository repository=repository((url,max,prefix)->{throw new AssertionError("Metadata migration must be local");});PodcastShow migrated=repository.show(old.showId);
+        assertTrue(migrated.followed);assertEquals(NOW,migrated.followedAt);assertFalse(migrated.author.isEmpty());assertTrue(migrated.genres.contains("社會與文化"));
     }
     private void write(String name,String data)throws IOException{try(FileOutputStream out=context.openFileOutput(name,0)){out.write(bytes(data));}}
     private static String legacyId(String value)throws Exception{byte[] digest=MessageDigest.getInstance("SHA-256").digest(bytes(value));StringBuilder id=new StringBuilder("pod:");for(int n=0;n<12;n++)id.append(String.format(Locale.ROOT,"%02x",digest[n]));return id.toString();}
